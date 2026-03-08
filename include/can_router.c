@@ -252,5 +252,54 @@ void checkRoutes(const twai_message_t *msg)
             continue;
 
         printf("RouteHit: idx %u src 0x%03X\n", i, msg->identifier);
+
+        switch (g_routes[i].event_type) {
+            case EVENT_ALWAYS:
+                should_fire = true;
+                break;
+
+            case EVENT_ON_CHANGE:
+                if (detect_change(msg, i))
+                    should_fire = true;
+                break;
+
+            // more event types later
+        }
+
+    }
+}
+
+bool evaluate_event(uint8_t idx, const twai_message_t *msg)
+{
+    const route_entry_t *r = &g_routes[idx];
+
+    switch (r->event_type)
+    {
+        case EVENT_ALWAYS:
+            return true;
+
+        case EVENT_ON_CHANGE:
+            // TODO: store last value per route
+            return true; // placeholder
+
+        case EVENT_ON_RISING:
+            if (msg->data[0] == 1)   // button down
+                return true;
+            return false;
+
+        case EVENT_ON_FALLING:
+            if (msg->data[0] == 0)   // button up
+                return true;
+            return false;
+
+        case EVENT_ON_MATCH:
+            // Compare msg->data[] to r->parameters[]
+            for (uint8_t i = 0; i < msg->data_length_code; i++)
+                if (msg->data[i] != r->parameters[i])
+                    return false;
+            return true;
+
+        default:
+            return false;
     }
 }
