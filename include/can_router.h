@@ -47,6 +47,24 @@ typedef struct __attribute__((packed)) {
     uint8_t reserved;  /* future use */
 } producer_cfg_t;
 
+typedef enum {
+    EVENT_ALWAYS        = 0x00,   // Fire on every matching message
+    EVENT_ON_CHANGE     = 0x01,   // Fire only when payload changes
+    EVENT_ON_RISING     = 0x02,   // Fire when value goes 0 → 1
+    EVENT_ON_FALLING    = 0x03,   // Fire when value goes 1 → 0
+    EVENT_ON_MATCH      = 0x04    // Fire when payload matches parameters[]
+} event_type_t;
+
+typedef enum {
+    ACTION_NONE         = 0x00,   // No action
+    ACTION_FORWARD      = 0x01,   // Forward the frame unchanged
+    ACTION_TOGGLE       = 0x02,   // Toggle target submodule (ARGB)
+    ACTION_SET_VALUE    = 0x03,   // Write a value to target
+    ACTION_SCALE        = 0x04,   // Scale and forward
+    ACTION_MAP_BYTE     = 0x05    // Extract byte N → write to target
+} action_type_t;
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -57,6 +75,7 @@ extern "C" {
 
 extern route_entry_t   g_routes[MAX_ROUTES];
 extern producer_cfg_t  g_producerCfg[MAX_SUB_MODULES];
+
 
 /* ============================================================================
  *  ROUTING API
