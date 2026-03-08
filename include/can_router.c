@@ -13,6 +13,47 @@ static route_entry_t rxRouteBuffer;
 static uint8_t       rxRouteIndex = 0;
 static uint8_t       rxRouteSlot  = 0xFF;
 
+/**
+ * @brief Stores the last-seen primary data byte for each route.
+ *
+ * This array is used by EVENT_ON_CHANGE, EVENT_ON_RISING, and EVENT_ON_FALLING.
+ *
+ */
+static uint8_t g_last_values[MAX_ROUTES] = {0};
+
+
+/* ============================================================================
+ *  ROUTING: EDGE DETECTION
+ * ========================================================================== */
+
+/**
+ * @brief Detect a rising edge (0 → 1) on msg->data[0].
+ */
+bool detect_rising_edge(const twai_message_t *msg, uint8_t idx)
+{
+    uint8_t new_val = msg->data[0];
+    uint8_t old_val = g_last_values[idx];
+
+    g_last_values[idx] = new_val;   // Update stored state
+
+    return (old_val == 0 && new_val == 1);
+}
+
+/**
+ * @brief Detect a falling edge (1 → 0) on msg->data[0].
+ */
+bool detect_falling_edge(const twai_message_t *msg, uint8_t idx)
+{
+    uint8_t new_val = msg->data[0];
+    uint8_t old_val = g_last_values[idx];
+
+    g_last_values[idx] = new_val;   // Update stored state
+
+    return (old_val == 1 && new_val == 0);
+}
+
+
+
 /* ============================================================================
  *  ROUTING: MULTI-FRAME RECEIVER
  * ========================================================================== */
@@ -242,33 +283,48 @@ void checkRoutes(const twai_message_t *msg)
     }
 
     /* ---------------------------------------------------------
-     * ROUTE EXECUTION (normal CAN traffic)
-     * --------------------------------------------------------- */
+    * ROUTE EXECUTION (normal CAN traffic)
+    * --------------------------------------------------------- */
     for (uint8_t i = 0; i < MAX_ROUTES; i++) {
-        if (!g_routes[i].enabled)
+
+        route_entry_t *r = &g_routes[i];
+
+        if (!r->enabled) /* skip disabled routes */
             continue;
 
-        if (msg->identifier != g_routes[i].source_msg_id)
+        if (msg->identifier != r->source_msg_id) /* skip non-matching messages */
             continue;
 
         printf("RouteHit: idx %u src 0x%03X\n", i, msg->identifier);
 
-        switch (g_routes[i].event_type) {
-            case EVENT_ALWAYS:
-                should_fire = true;
-                break;
+        /* Evaluate event condition */
+        if (!evaluate_event(i, msg)) /* skip non-matching events */
+            continue;
 
-            case EVENT_ON_CHANGE:
-                if (detect_change(msg, i))
-                    should_fire = true;
-                break;
-
-            // more event types later
-        }
-
+        /* Execute the action */
+        execute_action(i, msg);
     }
+
 }
 
+/**
+ * @brief Determine whether a route should fire based on its event type.
+ *
+ * EVENT_ALWAYS:
+ *      Fire every time the source message ID matches.
+ *
+ * EVENT_ON_CHANGE:
+ *      Fire only when the payload changes compared to last time.
+ *
+ * EVENT_ON_RISING:
+ *      Fire when the value transitions 0 → 1.
+ *
+ * EVENT_ON_FALLING:
+ *      Fire when the value transitions 1 → 0.
+ *
+ * EVENT_ON_MATCH:
+ *      Fire when the payload exactly matches the route parameters[].
+ */
 bool evaluate_event(uint8_t idx, const twai_message_t *msg)
 {
     const route_entry_t *r = &g_routes[idx];
@@ -280,26 +336,81 @@ bool evaluate_event(uint8_t idx, const twai_message_t *msg)
 
         case EVENT_ON_CHANGE:
             // TODO: store last value per route
-            return true; // placeholder
+            return detect_change(msg, idx);
 
         case EVENT_ON_RISING:
-            if (msg->data[0] == 1)   // button down
-                return true;
-            return false;
+            return detect_rising_edge(msg, idx);
 
         case EVENT_ON_FALLING:
-            if (msg->data[0] == 0)   // button up
-                return true;
-            return false;
+            return detect_falling_edge(msg, idx);
 
         case EVENT_ON_MATCH:
-            // Compare msg->data[] to r->parameters[]
-            for (uint8_t i = 0; i < msg->data_length_code; i++)
-                if (msg->data[i] != r->parameters[i])
-                    return false;
-            return true;
+            return payload_matches_parameters(msg, r);
 
         default:
             return false;
+    }
+}
+
+/**
+ * @brief Execute the action associated with a route.
+ *
+ * ACTION_FORWARD:
+ *      Forward the incoming CAN frame unchanged to the target message ID.
+ *
+ * ACTION_TOGGLE:
+ *      Send a 1-byte "toggle" command to the target submodule.
+ *
+ * ACTION_SET_VALUE:
+ *      Send the route's parameter bytes to the target message ID.
+ *
+ * ACTION_MAP_BYTE:
+ *      Extract a byte from the source payload and send it to the target.
+ *
+ * ACTION_PWM / ACTION_STROBE:
+ *      Invoke the output personality logic (blink, pwm, strobe).
+ */
+void execute_action(uint8_t idx, const twai_message_t *msg)
+{
+    route_entry_t *r = &g_routes[idx];
+
+    switch (r->action_type)
+    {
+        case ACTION_FORWARD:
+            /* Forward the original payload unchanged */
+            send_message(r->target_msg_id, msg->data, msg->data_length_code);
+            break;
+
+        case ACTION_TOGGLE: {
+            /* Toggle commands are always 1-byte payloads */
+            uint8_t payload = 1;
+            send_message(r->target_msg_id, &payload, 1);
+            break;
+        }
+
+        case ACTION_SET_VALUE:
+            /* Send the route's parameter bytes */
+            send_message(r->target_msg_id, r->parameters, r->param_len);
+            break;
+
+        case ACTION_MAP_BYTE: {
+            /* Extract byte N from the source payload */
+            uint8_t index = r->parameters[0];
+            uint8_t value = msg->data[index];
+            send_message(r->target_msg_id, &value, 1);
+            break;
+        }
+
+        case ACTION_PWM:
+            handle_pwm_action(r, msg);
+            break;
+
+        case ACTION_STROBE:
+            handle_strobe_action(r, msg);
+            break;
+
+        default:
+            /* Unknown or unimplemented action */
+            break;
     }
 }
