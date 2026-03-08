@@ -111,8 +111,6 @@ void handleRouteReadNVS(void)
     loadRouteTableFromNVS();
 }
 
-
-
 /* ============================================================================
  *  PRODUCER CONFIG HANDLERS
  * ========================================================================== */
@@ -177,15 +175,81 @@ void handleProducerWriteNVS(void)
 
 void checkRoutes(const twai_message_t *msg)
 {
+    /* ---------------------------------------------------------
+     * CONFIGURATION COMMANDS (0x300–0x3FF)
+     * --------------------------------------------------------- */
+    if (msg->identifier >= 0x300 && msg->identifier <= 0x3FF) {
+
+        switch (msg->identifier)
+        {
+            case CFG_ROUTE_BEGIN_ID:
+                handleRouteBegin(msg);
+                break;
+
+            case CFG_ROUTE_DATA_ID:
+                handleRouteData(msg);
+                break;
+
+            case CFG_ROUTE_END_ID:
+                handleRouteEnd(msg);
+                break;
+
+            case CFG_ROUTE_DELETE_ID:
+                handleRouteDelete(msg);
+                break;
+
+            case CFG_ROUTE_PURGE_ID:
+                handleRoutePurge(msg);
+                break;
+
+            case CFG_ROUTE_WRITE_NVS_ID:
+                handleRouteWriteNVS();
+                break;
+
+            case CFG_ROUTE_READ_NVS_ID:
+                handleRouteReadNVS();
+                break;
+
+            case CFG_PRODUCER_CFG_ID:
+                handleProducerCfg(msg);
+                break;
+
+            case CFG_PRODUCER_PURGE_ID:
+                handleProducerPurge(msg);
+                break;
+
+            case CFG_PRODUCER_DEFAULTS_ID:
+                handleProducerDefaults(msg);
+                break;
+
+            case CFG_PRODUCER_APPLY_ID:
+                handleProducerApply();
+                break;
+
+            case REQ_PRODUCER_CFG_ID:
+                handleReqProducerCfg(msg);
+                break;
+
+            case CFG_PRODUCER_WRITE_NVS_ID:
+                handleProducerWriteNVS();
+                break;
+
+            default:
+                break;
+        }
+
+        return; // <--- IMPORTANT
+    }
+
+    /* ---------------------------------------------------------
+     * ROUTE EXECUTION (normal CAN traffic)
+     * --------------------------------------------------------- */
     for (uint8_t i = 0; i < MAX_ROUTES; i++) {
         if (!g_routes[i].enabled)
             continue;
 
         if (msg->identifier != g_routes[i].source_msg_id)
             continue;
-
-        /* TODO: event_type evaluation */
-        /* TODO: action execution */
 
         printf("RouteHit: idx %u src 0x%03X\n", i, msg->identifier);
     }
