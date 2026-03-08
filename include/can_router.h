@@ -20,9 +20,11 @@
  *  DATA STRUCTURES
  * ========================================================================== */
 
+#define ROUTE_ENTRY_PARAM_LEN      (8U)
+#define ROUTE_ENTRY_SOURCE_ID_LEN  (4U)
 typedef struct __attribute__((packed)) {
-    uint8_t  parameters[8];      /* configuration parameters (8 bytes) */
-    uint8_t  source_node_id[4];  /* producer node ID (4 bytes) */
+    uint8_t  parameters[ROUTE_ENTRY_PARAM_LEN];          /* configuration parameters (8 bytes) */
+    uint8_t  source_node_id[ROUTE_ENTRY_SOURCE_ID_LEN];  /* producer node ID (4 bytes) */
 
     uint16_t source_msg_id;      /* source CAN message ID */
     uint16_t target_msg_id;      /* target CAN message ID */
@@ -48,20 +50,22 @@ typedef struct __attribute__((packed)) {
 } producer_cfg_t;
 
 typedef enum {
-    EVENT_ALWAYS        = 0x00,   // Fire on every matching message
-    EVENT_ON_CHANGE     = 0x01,   // Fire only when payload changes
-    EVENT_ON_RISING     = 0x02,   // Fire when value goes 0 → 1
-    EVENT_ON_FALLING    = 0x03,   // Fire when value goes 1 → 0
-    EVENT_ON_MATCH      = 0x04    // Fire when payload matches parameters[]
+    EVENT_ALWAYS,        /**< Fire on every matching message */
+    EVENT_ON_CHANGE,     /**< Fire only when payload changes */
+    EVENT_ON_RISING,     /**< Fire when value goes 0 → 1 */
+    EVENT_ON_FALLING,    /**< Fire when value goes 1 → 0 */
+    EVENT_ON_MATCH       /**< Fire when payload matches parameters[] */
 } event_type_t;
 
 typedef enum {
-    ACTION_NONE         = 0x00,   // No action
-    ACTION_FORWARD      = 0x01,   // Forward the frame unchanged
-    ACTION_TOGGLE       = 0x02,   // Toggle target submodule (ARGB)
-    ACTION_SET_VALUE    = 0x03,   // Write a value to target
-    ACTION_SCALE        = 0x04,   // Scale and forward
-    ACTION_MAP_BYTE     = 0x05    // Extract byte N → write to target
+    ACTION_NONE,         /**< No action */
+    ACTION_FORWARD,      /**< Forward the frame unchanged */
+    ACTION_TOGGLE,       /**< Toggle target submodule (ARGB) */
+    ACTION_SET_VALUE,    /**< Write a value to target */
+    ACTION_SCALE,        /**< Scale and forward */
+    ACTION_MAP_BYTE,     /**< Extract byte N -> write to target */
+    ACTION_PWM,          /**< PWM output */
+    ACTION_STROBE        /**< Strobe output */
 } action_type_t;
 
 
