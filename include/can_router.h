@@ -86,6 +86,9 @@ extern producer_cfg_t  g_producerCfg[MAX_SUB_MODULES];
  * ========================================================================== */
 
 void checkRoutes(const twai_message_t *msg);
+bool evaluate_event(uint8_t idx, const twai_message_t *msg);
+void execute_action(uint8_t idx, const twai_message_t *msg);
+
 
 void handleRouteBegin(const twai_message_t *msg);
 void handleRouteData(const twai_message_t *msg);
