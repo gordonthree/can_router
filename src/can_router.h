@@ -1,28 +1,25 @@
 #pragma once
 
-
 #include <stdint.h>
-
-#include "can_router_platform.h"
-#include "canbus_project.h"
+#include "can_platform.h" /**< Platform specific aliases, can_msg_t becomes twai_message_t on esp32 */
 
 /* ============================================================================
  *  CONSTANTS
  * ========================================================================== */
 
 #define MAX_ROUTES                 (8U)
-#define PRODUCER_FLAG_ENABLED      (0x01U)
-#define PRODUCER_FLAG_CHANGE_ONLY  (0x02U)
-#define PRODUCER_FLAG_RESERVED1    (0x04U)
-#define PRODUCER_FLAG_RESERVED2    (0x08U)
+#define ROUTE_ENTRY_PARAM_LEN      (8U)
+#define ROUTE_ENTRY_SOURCE_ID_LEN  (4U)
+#define ROUTE_ACTION_PARAM_LEN     (4U)
+#define ROUTE_TAKE_NO_ACTION       (0xFFFFU)
+#define ROUTE_CMD_START            (0x300U)
+#define ROUTE_CMD_END              (0x3FFU)
 
 /* ============================================================================
  *  DATA STRUCTURES
  * ========================================================================== */
 
-#define ROUTE_ENTRY_PARAM_LEN      (8U)
-#define ROUTE_ENTRY_SOURCE_ID_LEN  (4U)
-typedef struct __attribute__((packed)) {
+typedef struct {
     uint8_t  parameters[ROUTE_ENTRY_PARAM_LEN];          /* configuration parameters (8 bytes) */
     uint8_t  source_node_id[ROUTE_ENTRY_SOURCE_ID_LEN];  /* producer node ID (4 bytes) */
 
@@ -50,56 +47,67 @@ typedef enum {
     EVENT_ON_MATCH       /**< Fire when payload matches parameters[] */
 } event_type_t;
 
+
+
 typedef enum {
-    ACTION_NONE,         /**< No action */
-    ACTION_FORWARD,      /**< Forward the frame unchanged */
-    ACTION_TOGGLE,       /**< Toggle target submodule (ARGB) */
-    ACTION_SET_VALUE,    /**< Write a value to target */
-    ACTION_SCALE,        /**< Scale and forward */
-    ACTION_MAP_BYTE,     /**< Extract byte N -> write to target */
-    ACTION_PWM,          /**< PWM output */
-    ACTION_STROBE        /**< Strobe output */
-} action_type_t;
+    ROUTE_PARAM_0 = 0,
+    ROUTE_PARAM_1,
+    ROUTE_PARAM_2,
+    ROUTE_PARAM_3
+} route_param_t;
+
+typedef enum {
+    MSG_DATA_0 = 0,
+    MSG_DATA_1,
+    MSG_DATA_2,
+    MSG_DATA_3,
+    MSG_DATA_4,
+    MSG_DATA_5,
+    MSG_DATA_6,
+    MSG_DATA_7
+} msg_data_t;
 
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+typedef struct {
+    uint16_t actionMsgId;                       // Action is based on existing 16-bit CAN-bus message IDs
+    uint8_t  valid;                             // 1 = action exists
+    uint8_t  sub_idx;                           // which submodule to act on
+    uint8_t  param[ROUTE_ACTION_PARAM_LEN];     // small parameter block
+} router_action_t;
 
 /* ============================================================================
  *  GLOBALS
  * ========================================================================== */
 
 extern route_entry_t   g_routes[MAX_ROUTES];
+extern volatile bool g_routeSaveRequested;
+extern volatile bool g_routeLoadRequested;
 
 /* ============================================================================
  *  ROUTING API
  * ========================================================================== */
 
-void checkRoutes(const can_msg_t *msg);
-bool evaluate_event(uint8_t idx, const can_msg_t *msg);
-void execute_action(uint8_t idx, const can_msg_t *msg);
+bool checkRoutes(const can_msg_t *msg, router_action_t *out);
+bool evaluate_event(const uint8_t idx, const can_msg_t *msg);
+bool payload_matches_parameters(const can_msg_t *msg, uint8_t idx);
+bool detect_change(const can_msg_t *msg, uint8_t idx);
 
+/* ============================================================================
+ *  ROUTE CONFIGURATION HANDLERS
+ * ========================================================================== */
 
-void handleRouteBegin(const can_msg_t *msg);
-void handleRouteData(const can_msg_t *msg);
-void handleRouteEnd(const can_msg_t *msg);
+void handleRouteBegin(const  can_msg_t *msg);
+void handleRouteData(const   can_msg_t *msg);
+void handleRouteEnd(const    can_msg_t *msg);
 void handleRouteDelete(const can_msg_t *msg);
-void handleRoutePurge(const can_msg_t *msg);
+void handleRoutePurge(const  can_msg_t *msg);
+
+/* ============================================================================
+ *  HELPER AND WRAPPER FUNCTIONS
+ * ========================================================================== */
 
 void handleRouteWriteNVS(void);
 void handleRouteReadNVS(void);
-
-/* ============================================================================
- *  PRODUCER CONFIG API
- * ========================================================================== */
-
-void handleProducerCfg(const can_msg_t *msg);
-void handleProducerWriteNVS(void);
-void handleProducerPurge(const can_msg_t *msg);
-void handleProducerDefaults(const can_msg_t *msg);
-void handleProducerApply(void);
-void handleReqProducerCfg(const can_msg_t *msg);
 
 /* ============================================================================
  *  NVS LOAD/SAVE API (platform-specific)
@@ -107,20 +115,3 @@ void handleReqProducerCfg(const can_msg_t *msg);
 
 void loadRouteTableFromNVS(void);
 void saveRouteTableToNVS(void);
-
-void loadProducerCfgFromNVS(void);
-void saveProducerCfgToNVS(void);
-
-/* ============================================================================
- *  CAN BUS Interface function
- * ========================================================================== */
-void send_message(uint16_t msgid, uint8_t *data, uint8_t dlc);
-
-/* ============================================================================
- *  END C LINKAGE
- * ========================================================================== */
-
-#ifdef __cplusplus
-}
-#endif
-

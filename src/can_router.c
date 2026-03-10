@@ -1,24 +1,29 @@
 #include "can_router.h"
 
 
+bool detect_change(const can_msg_t *msg, uint8_t idx);
+bool payload_matches_parameters(const can_msg_t *msg, uint8_t idx);
+
+
 /* ============================================================================
  *  GLOBAL STORAGE
  * ========================================================================== */
 
 route_entry_t   g_routes[MAX_ROUTES];
 
+volatile bool g_routeSaveRequested = false;
+volatile bool g_routeLoadRequested = false;
+
+static uint8_t g_last_values[MAX_ROUTES] = {0};
+
+/* ============================================================================
+ *  LOCAL STORAGE
+ * ========================================================================== */
+
 /* Temporary buffer for multi-frame route reception */
 static route_entry_t rxRouteBuffer;
 static uint8_t       rxRouteIndex = 0;
 static uint8_t       rxRouteSlot  = 0xFF;
-
-/**
- * @brief Stores the last-seen primary data byte for each route.
- *
- * This array is used by EVENT_ON_CHANGE, EVENT_ON_RISING, and EVENT_ON_FALLING.
- *
- */
-static uint8_t g_last_values[MAX_ROUTES] = {0};
 
 
 /* ============================================================================
@@ -26,11 +31,11 @@ static uint8_t g_last_values[MAX_ROUTES] = {0};
  * ========================================================================== */
 
 /**
- * @brief Detect a rising edge (0 → 1) on msg->data[0].
+ * @brief Detect a rising edge (0 → 1) on msg->data[5].
  */
 bool detect_rising_edge(const can_msg_t *msg, uint8_t idx)
 {
-    uint8_t new_val = msg->data[0];
+    uint8_t new_val = msg->data[MSG_DATA_5]; 
     uint8_t old_val = g_last_values[idx];
 
     g_last_values[idx] = new_val;   // Update stored state
@@ -39,11 +44,11 @@ bool detect_rising_edge(const can_msg_t *msg, uint8_t idx)
 }
 
 /**
- * @brief Detect a falling edge (1 → 0) on msg->data[0].
+ * @brief Detect a falling edge (1 → 0) on msg->data[5].
  */
 bool detect_falling_edge(const can_msg_t *msg, uint8_t idx)
 {
-    uint8_t new_val = msg->data[0];
+    uint8_t new_val = msg->data[MSG_DATA_5]; 
     uint8_t old_val = g_last_values[idx];
 
     g_last_values[idx] = new_val;   // Update stored state
@@ -51,7 +56,21 @@ bool detect_falling_edge(const can_msg_t *msg, uint8_t idx)
     return (old_val == 1 && new_val == 0);
 }
 
+bool detect_change(const can_msg_t *msg, uint8_t idx)
+{
+    return (msg->data[MSG_DATA_5] != g_last_values[idx]); 
+}
 
+bool payload_matches_parameters(const can_msg_t *msg, uint8_t idx)
+{ // TODO: confirm the return is accurate
+const route_entry_t *r = &g_routes[idx];
+
+return (msg->data[MSG_DATA_4] == r->parameters[ROUTE_PARAM_0] &&
+        msg->data[MSG_DATA_5] == r->parameters[ROUTE_PARAM_1] &&
+        msg->data[MSG_DATA_6] == r->parameters[ROUTE_PARAM_2] &&
+        msg->data[MSG_DATA_7] == r->parameters[ROUTE_PARAM_3]);
+
+}
 
 /* ============================================================================
  *  ROUTING: MULTI-FRAME RECEIVER
@@ -62,15 +81,13 @@ void handleRouteBegin(const can_msg_t *msg)
     if (msg->data_length_code < CFG_ROUTE_BEGIN_DLC)
         return;
 
-    uint8_t route_idx = msg->data[4];
+    uint8_t route_idx = msg->data[MSG_DATA_4]; /* data byte 4 is the index value */
     if (route_idx >= MAX_ROUTES)
         return;
 
     rxRouteSlot  = route_idx;
     rxRouteIndex = 0;
     memset(&rxRouteBuffer, 0, sizeof(rxRouteBuffer));
-
-    printf("RouteBegin: slot %u\n", route_idx);
 }
 
 
@@ -86,10 +103,8 @@ void handleRouteData(const can_msg_t *msg)
         uint8_t dst = rxRouteIndex++;
         if (dst >= sizeof(route_entry_t))
             break;
-        ((uint8_t*)&rxRouteBuffer)[dst] = msg->data[4 + i];
+        ((uint8_t*)&rxRouteBuffer)[dst] = msg->data[MSG_DATA_4 + i];
     }
-
-    printf("RouteData: slot %u idx %u\n", rxRouteSlot, rxRouteIndex);
 }
 
 void handleRouteEnd(const can_msg_t *msg)
@@ -102,10 +117,6 @@ void handleRouteEnd(const can_msg_t *msg)
     memcpy(&g_routes[rxRouteSlot], &rxRouteBuffer, sizeof(route_entry_t));
     g_routes[rxRouteSlot].enabled = 1;
 
-    printf("RouteEnd: stored route %u\n", rxRouteSlot);
-
-    rxRouteSlot  = 0xFF;
-    rxRouteIndex = 0;
 }
 
 void handleRouteDelete(const can_msg_t *msg)
@@ -113,198 +124,95 @@ void handleRouteDelete(const can_msg_t *msg)
     if (msg->data_length_code < CFG_ROUTE_DELETE_DLC)
         return;
 
-    uint8_t idx = msg->data[4];
+    uint8_t idx = msg->data[MSG_DATA_4];
     if (idx >= MAX_ROUTES)
         return;
 
     memset(&g_routes[idx], 0, sizeof(route_entry_t));
-    printf("RouteDelete: idx %u\n", idx);
 }
 
 void handleRoutePurge(const can_msg_t *msg)
 {
     (void)msg;
     memset(g_routes, 0, sizeof(g_routes));
-    printf("RoutePurge: all cleared\n");
 }
-
-/* ============================================================================
- *  NVS STUBS FOR NON-ESP32 PLATFORMS
- * ========================================================================== */
-
-#ifndef ESP32
-
-void loadRouteTableFromNVS(void) {}
-void saveRouteTableToNVS(void) {}
-void loadProducerCfgFromNVS(void) {}
-void saveProducerCfgToNVS(void) {}
-
-#endif
 
 void handleRouteWriteNVS(void)
 {
-    saveRouteTableToNVS();
+    g_routeSaveRequested = true;
 }
 
 void handleRouteReadNVS(void)
 {
-    loadRouteTableFromNVS();
+    g_routeLoadRequested = true;
 }
 
-/* ============================================================================
- *  PRODUCER CONFIG HANDLERS
- * ========================================================================== */
-
-void handleProducerCfg(const can_msg_t *msg)
-{
-    if (msg->data_length_code < CFG_PRODUCER_CFG_DLC)
-        return;
-
-    uint8_t idx = msg->data[4];
-    if (idx >= MAX_SUB_MODULES)
-        return;
-
-    g_producerCfg[idx].sub_idx  = idx;
-    g_producerCfg[idx].rate_hz  = msg->data[5];
-    g_producerCfg[idx].flags    = msg->data[6];
-    g_producerCfg[idx].reserved = msg->data[7];
-
-    printf("ProducerCfg: sub %u rate %u flags 0x%02X\n",
-           idx,
-           g_producerCfg[idx].rate_hz,
-           g_producerCfg[idx].flags);
-}
-
-void handleProducerPurge(const can_msg_t *msg)
-{
-    (void)msg;
-    memset(g_producerCfg, 0, sizeof(g_producerCfg));
-    printf("ProducerCfg: purged\n");
-}
-
-void handleProducerDefaults(const can_msg_t *msg)
-{
-    (void)msg;
-    memset(g_producerCfg, 0, sizeof(g_producerCfg));
-    printf("ProducerCfg: defaults applied\n");
-}
-
-void handleProducerApply(void)
-{
-    /* No-op: config is live immediately */
-    printf("ProducerCfg: apply\n");
-}
-
-void handleReqProducerCfg(const can_msg_t *msg)
-{
-    (void)msg;
-    /* The caller (ESP32) will send RESP_PRODUCER_CFG_ID frames.
-       This module is platform-agnostic, so we do nothing here. */
-    printf("ProducerCfg: request received (platform must respond)\n");
-}
-
-void handleProducerWriteNVS(void)
-{
-    saveProducerCfgToNVS();
-    printf("ProducerCfg: saved\n");
-}
 
 /* ============================================================================
  *  ROUTE EXECUTION HOOK
  * ========================================================================== */
 
-void checkRoutes(const can_msg_t *msg)
+bool checkRoutes(const can_msg_t *msg, router_action_t *out)
 {
+    // Default: no action
+    out->valid = 0;
+    out->actionMsgId = ROUTE_TAKE_NO_ACTION;
+    out->sub_idx = 0;
+    memset(out->param, 0, ROUTE_ACTION_PARAM_LEN);
+
     /* ---------------------------------------------------------
-     * CONFIGURATION COMMANDS (0x300–0x3FF)
-     * --------------------------------------------------------- */
-    if (msg->identifier >= 0x300 && msg->identifier <= 0x3FF) {
+        * CONFIGURATION COMMANDS (0x300–0x3FF)
+        * --------------------------------------------------------- */
+    if (msg->identifier >= ROUTE_CMD_START && msg->identifier <= ROUTE_CMD_END) {
 
         switch (msg->identifier)
         {
-            case CFG_ROUTE_BEGIN_ID:
-                handleRouteBegin(msg);
-                break;
-
-            case CFG_ROUTE_DATA_ID:
-                handleRouteData(msg);
-                break;
-
-            case CFG_ROUTE_END_ID:
-                handleRouteEnd(msg);
-                break;
-
-            case CFG_ROUTE_DELETE_ID:
-                handleRouteDelete(msg);
-                break;
-
-            case CFG_ROUTE_PURGE_ID:
-                handleRoutePurge(msg);
-                break;
-
-            case CFG_ROUTE_WRITE_NVS_ID:
-                handleRouteWriteNVS();
-                break;
-
-            case CFG_ROUTE_READ_NVS_ID:
-                handleRouteReadNVS();
-                break;
-
-            case CFG_PRODUCER_CFG_ID:
-                handleProducerCfg(msg);
-                break;
-
-            case CFG_PRODUCER_PURGE_ID:
-                handleProducerPurge(msg);
-                break;
-
-            case CFG_PRODUCER_DEFAULTS_ID:
-                handleProducerDefaults(msg);
-                break;
-
-            case CFG_PRODUCER_APPLY_ID:
-                handleProducerApply();
-                break;
-
-            case REQ_PRODUCER_CFG_ID:
-                handleReqProducerCfg(msg);
-                break;
-
-            case CFG_PRODUCER_WRITE_NVS_ID:
-                handleProducerWriteNVS();
-                break;
-
-            default:
-                break;
+            case CFG_ROUTE_BEGIN_ID:     handleRouteBegin(msg);  break;
+            case CFG_ROUTE_DATA_ID:      handleRouteData(msg);   break;
+            case CFG_ROUTE_END_ID:       handleRouteEnd(msg);    break;
+            case CFG_ROUTE_DELETE_ID:    handleRouteDelete(msg); break;
+            case CFG_ROUTE_PURGE_ID:     handleRoutePurge(msg);  break;
+            case CFG_ROUTE_WRITE_NVS_ID: handleRouteWriteNVS();  break;
+            case CFG_ROUTE_READ_NVS_ID:  handleRouteReadNVS();   break;
+            default: break;
         }
 
-        return; // <--- IMPORTANT
+        return false;   // <--- CONFIG MESSAGES DO NOT PRODUCE ACTIONS
     }
 
     /* ---------------------------------------------------------
-    * ROUTE EXECUTION (normal CAN traffic)
-    * --------------------------------------------------------- */
+        * ROUTE EXECUTION (normal CAN traffic)
+        * --------------------------------------------------------- */
     for (uint8_t i = 0; i < MAX_ROUTES; i++) {
 
         route_entry_t *r = &g_routes[i];
 
-        if (!r->enabled) /* skip disabled routes */
+        if (!r->enabled)
             continue;
 
-        if (msg->identifier != r->source_msg_id) /* skip non-matching messages */
+        if (msg->identifier != r->source_msg_id)
             continue;
 
-        printf("RouteHit: idx %u src 0x%03X\n", i, msg->identifier);
-
-        /* Evaluate event condition */
-        if (!evaluate_event(i, msg)) /* skip non-matching events */
+        if (!evaluate_event(i, msg))
             continue;
 
-        /* Execute the action */
-        execute_action(i, msg);
+        /* Route matched — fill out semantic action */
+        out->valid = 1;
+        out->actionMsgId = r->target_msg_id;   // may be 0xFFFF
+        out->sub_idx = r->target_sub_idx;
+
+        // Copy parameters into param[]
+        out->param[ROUTE_PARAM_0] = msg->data[MSG_DATA_5];
+        out->param[ROUTE_PARAM_1] = msg->data[MSG_DATA_6];
+        out->param[ROUTE_PARAM_2] = msg->data[MSG_DATA_7];
+        out->param[ROUTE_PARAM_3] = 0;
+
+        return true;    // <--- ROUTE MATCHED
     }
 
+    return false;       // <--- NO ROUTE MATCHED
 }
+
 
 /**
  * @brief Determine whether a route should fire based on its event type.
@@ -324,7 +232,7 @@ void checkRoutes(const can_msg_t *msg)
  * EVENT_ON_MATCH:
  *      Fire when the payload exactly matches the route parameters[].
  */
-bool evaluate_event(uint8_t idx, const can_msg_t *msg)
+bool evaluate_event(const uint8_t idx, const can_msg_t *msg)
 {
     const route_entry_t *r = &g_routes[idx];
 
@@ -344,72 +252,10 @@ bool evaluate_event(uint8_t idx, const can_msg_t *msg)
             return detect_falling_edge(msg, idx);
 
         case EVENT_ON_MATCH:
-            return payload_matches_parameters(msg, r);
+            return payload_matches_parameters(msg, idx);
 
         default:
             return false;
     }
 }
 
-/**
- * @brief Execute the action associated with a route.
- *
- * ACTION_FORWARD:
- *      Forward the incoming CAN frame unchanged to the target message ID.
- *
- * ACTION_TOGGLE:
- *      Send a 1-byte "toggle" command to the target submodule.
- *
- * ACTION_SET_VALUE:
- *      Send the route's parameter bytes to the target message ID.
- *
- * ACTION_MAP_BYTE:
- *      Extract a byte from the source payload and send it to the target.
- *
- * ACTION_PWM / ACTION_STROBE:
- *      Invoke the output personality logic (blink, pwm, strobe).
- */
-void execute_action(uint8_t idx, const can_msg_t *msg)
-{
-    route_entry_t *r = &g_routes[idx];
-
-    switch (r->action_type)
-    {
-        case ACTION_FORWARD:
-            /* Forward the original payload unchanged */
-            send_message(r->target_msg_id, msg->data, msg->data_length_code);
-            break;
-
-        case ACTION_TOGGLE: {
-            /* Toggle commands are always 1-byte payloads */
-            uint8_t payload = 1;
-            send_message(r->target_msg_id, &payload, 1);
-            break;
-        }
-
-        case ACTION_SET_VALUE:
-            /* Send the route's parameter bytes */
-            send_message(r->target_msg_id, r->parameters, r->param_len);
-            break;
-
-        case ACTION_MAP_BYTE: {
-            /* Extract byte N from the source payload */
-            uint8_t index = r->parameters[0];
-            uint8_t value = msg->data[index];
-            send_message(r->target_msg_id, &value, 1);
-            break;
-        }
-
-        case ACTION_PWM:
-            handle_pwm_action(r, msg);
-            break;
-
-        case ACTION_STROBE:
-            handle_strobe_action(r, msg);
-            break;
-
-        default:
-            /* Unknown or unimplemented action */
-            break;
-    }
-}
