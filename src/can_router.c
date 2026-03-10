@@ -29,7 +29,7 @@ static uint8_t g_last_values[MAX_ROUTES] = {0};
 /**
  * @brief Detect a rising edge (0 → 1) on msg->data[0].
  */
-bool detect_rising_edge(const twai_message_t *msg, uint8_t idx)
+bool detect_rising_edge(const can_msg_t *msg, uint8_t idx)
 {
     uint8_t new_val = msg->data[0];
     uint8_t old_val = g_last_values[idx];
@@ -42,7 +42,7 @@ bool detect_rising_edge(const twai_message_t *msg, uint8_t idx)
 /**
  * @brief Detect a falling edge (1 → 0) on msg->data[0].
  */
-bool detect_falling_edge(const twai_message_t *msg, uint8_t idx)
+bool detect_falling_edge(const can_msg_t *msg, uint8_t idx)
 {
     uint8_t new_val = msg->data[0];
     uint8_t old_val = g_last_values[idx];
@@ -58,7 +58,7 @@ bool detect_falling_edge(const twai_message_t *msg, uint8_t idx)
  *  ROUTING: MULTI-FRAME RECEIVER
  * ========================================================================== */
 
-void handleRouteBegin(const twai_message_t *msg)
+void handleRouteBegin(const can_msg_t *msg)
 {
     if (msg->data_length_code < CFG_ROUTE_BEGIN_DLC)
         return;
@@ -75,7 +75,7 @@ void handleRouteBegin(const twai_message_t *msg)
 }
 
 
-void handleRouteData(const twai_message_t *msg)
+void handleRouteData(const can_msg_t *msg)
 {
     if (msg->data_length_code < CFG_ROUTE_DATA_DLC)
         return;
@@ -93,7 +93,7 @@ void handleRouteData(const twai_message_t *msg)
     printf("RouteData: slot %u idx %u\n", rxRouteSlot, rxRouteIndex);
 }
 
-void handleRouteEnd(const twai_message_t *msg)
+void handleRouteEnd(const can_msg_t *msg)
 {
     (void)msg;
 
@@ -109,7 +109,7 @@ void handleRouteEnd(const twai_message_t *msg)
     rxRouteIndex = 0;
 }
 
-void handleRouteDelete(const twai_message_t *msg)
+void handleRouteDelete(const can_msg_t *msg)
 {
     if (msg->data_length_code < CFG_ROUTE_DELETE_DLC)
         return;
@@ -122,7 +122,7 @@ void handleRouteDelete(const twai_message_t *msg)
     printf("RouteDelete: idx %u\n", idx);
 }
 
-void handleRoutePurge(const twai_message_t *msg)
+void handleRoutePurge(const can_msg_t *msg)
 {
     (void)msg;
     memset(g_routes, 0, sizeof(g_routes));
@@ -156,7 +156,7 @@ void handleRouteReadNVS(void)
  *  PRODUCER CONFIG HANDLERS
  * ========================================================================== */
 
-void handleProducerCfg(const twai_message_t *msg)
+void handleProducerCfg(const can_msg_t *msg)
 {
     if (msg->data_length_code < CFG_PRODUCER_CFG_DLC)
         return;
@@ -176,14 +176,14 @@ void handleProducerCfg(const twai_message_t *msg)
            g_producerCfg[idx].flags);
 }
 
-void handleProducerPurge(const twai_message_t *msg)
+void handleProducerPurge(const can_msg_t *msg)
 {
     (void)msg;
     memset(g_producerCfg, 0, sizeof(g_producerCfg));
     printf("ProducerCfg: purged\n");
 }
 
-void handleProducerDefaults(const twai_message_t *msg)
+void handleProducerDefaults(const can_msg_t *msg)
 {
     (void)msg;
     memset(g_producerCfg, 0, sizeof(g_producerCfg));
@@ -196,7 +196,7 @@ void handleProducerApply(void)
     printf("ProducerCfg: apply\n");
 }
 
-void handleReqProducerCfg(const twai_message_t *msg)
+void handleReqProducerCfg(const can_msg_t *msg)
 {
     (void)msg;
     /* The caller (ESP32) will send RESP_PRODUCER_CFG_ID frames.
@@ -214,7 +214,7 @@ void handleProducerWriteNVS(void)
  *  ROUTE EXECUTION HOOK
  * ========================================================================== */
 
-void checkRoutes(const twai_message_t *msg)
+void checkRoutes(const can_msg_t *msg)
 {
     /* ---------------------------------------------------------
      * CONFIGURATION COMMANDS (0x300–0x3FF)
@@ -325,7 +325,7 @@ void checkRoutes(const twai_message_t *msg)
  * EVENT_ON_MATCH:
  *      Fire when the payload exactly matches the route parameters[].
  */
-bool evaluate_event(uint8_t idx, const twai_message_t *msg)
+bool evaluate_event(uint8_t idx, const can_msg_t *msg)
 {
     const route_entry_t *r = &g_routes[idx];
 
@@ -370,7 +370,7 @@ bool evaluate_event(uint8_t idx, const twai_message_t *msg)
  * ACTION_PWM / ACTION_STROBE:
  *      Invoke the output personality logic (blink, pwm, strobe).
  */
-void execute_action(uint8_t idx, const twai_message_t *msg)
+void execute_action(uint8_t idx, const can_msg_t *msg)
 {
     route_entry_t *r = &g_routes[idx];
 

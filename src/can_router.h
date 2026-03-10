@@ -1,10 +1,10 @@
-#ifndef __CAN_ROUTER_H__
-#define __CAN_ROUTER_H__
+#pragma once
 
 
-#include "canbus_project.h"
 #include <stdint.h>
-#include "driver/twai.h"
+
+#include "can_router_platform.h"
+#include "canbus_project.h"
 
 /* ============================================================================
  *  CONSTANTS
@@ -85,16 +85,16 @@ extern producer_cfg_t  g_producerCfg[MAX_SUB_MODULES];
  *  ROUTING API
  * ========================================================================== */
 
-void checkRoutes(const twai_message_t *msg);
-bool evaluate_event(uint8_t idx, const twai_message_t *msg);
-void execute_action(uint8_t idx, const twai_message_t *msg);
+void checkRoutes(const can_msg_t *msg);
+bool evaluate_event(uint8_t idx, const can_msg_t *msg);
+void execute_action(uint8_t idx, const can_msg_t *msg);
 
 
-void handleRouteBegin(const twai_message_t *msg);
-void handleRouteData(const twai_message_t *msg);
-void handleRouteEnd(const twai_message_t *msg);
-void handleRouteDelete(const twai_message_t *msg);
-void handleRoutePurge(const twai_message_t *msg);
+void handleRouteBegin(const can_msg_t *msg);
+void handleRouteData(const can_msg_t *msg);
+void handleRouteEnd(const can_msg_t *msg);
+void handleRouteDelete(const can_msg_t *msg);
+void handleRoutePurge(const can_msg_t *msg);
 
 void handleRouteWriteNVS(void);
 void handleRouteReadNVS(void);
@@ -103,12 +103,12 @@ void handleRouteReadNVS(void);
  *  PRODUCER CONFIG API
  * ========================================================================== */
 
-void handleProducerCfg(const twai_message_t *msg);
+void handleProducerCfg(const can_msg_t *msg);
 void handleProducerWriteNVS(void);
-void handleProducerPurge(const twai_message_t *msg);
-void handleProducerDefaults(const twai_message_t *msg);
+void handleProducerPurge(const can_msg_t *msg);
+void handleProducerDefaults(const can_msg_t *msg);
 void handleProducerApply(void);
-void handleReqProducerCfg(const twai_message_t *msg);
+void handleReqProducerCfg(const can_msg_t *msg);
 
 /* ============================================================================
  *  NVS LOAD/SAVE API (platform-specific)
@@ -121,6 +121,11 @@ void loadProducerCfgFromNVS(void);
 void saveProducerCfgToNVS(void);
 
 /* ============================================================================
+ *  CAN BUS Interface function
+ * ========================================================================== */
+void send_message(uint16_t msgid, uint8_t *data, uint8_t dlc);
+
+/* ============================================================================
  *  END C LINKAGE
  * ========================================================================== */
 
@@ -128,4 +133,3 @@ void saveProducerCfgToNVS(void);
 }
 #endif
 
-#endif /* __CAN_ROUTER_H__ */
