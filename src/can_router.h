@@ -42,13 +42,6 @@ typedef struct __attribute__((packed)) {
     uint8_t  enabled;            /* enabled flag */
 } route_entry_t;
 
-typedef struct __attribute__((packed)) {
-    uint8_t sub_idx;   /* submodule index */
-    uint8_t rate_hz;   /* broadcast rate (0 = disabled) */
-    uint8_t flags;     /* PRODUCER_FLAG_* */
-    uint8_t reserved;  /* future use */
-} producer_cfg_t;
-
 typedef enum {
     EVENT_ALWAYS,        /**< Fire on every matching message */
     EVENT_ON_CHANGE,     /**< Fire only when payload changes */
@@ -78,8 +71,6 @@ extern "C" {
  * ========================================================================== */
 
 extern route_entry_t   g_routes[MAX_ROUTES];
-extern producer_cfg_t  g_producerCfg[MAX_SUB_MODULES];
-
 
 /* ============================================================================
  *  ROUTING API

@@ -6,7 +6,6 @@
  * ========================================================================== */
 
 route_entry_t   g_routes[MAX_ROUTES];
-producer_cfg_t  g_producerCfg[MAX_SUB_MODULES];
 
 /* Temporary buffer for multi-frame route reception */
 static route_entry_t rxRouteBuffer;
