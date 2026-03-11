@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "can_platform.h" /**< Platform specific aliases, can_msg_t becomes twai_message_t on esp32 */
+#include "canbus_project.h" /**< required for can message definitions */
 
 /* ============================================================================
  *  CONSTANTS
