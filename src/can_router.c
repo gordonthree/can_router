@@ -167,6 +167,7 @@ bool checkRoutes(const can_msg_t *msg, router_action_t *out)
 
         switch (msg->identifier)
         {
+            /* ---------------- ROUTER CONFIG ---------------- */
             case CFG_ROUTE_BEGIN_ID:     handleRouteBegin(msg);  break;
             case CFG_ROUTE_DATA_ID:      handleRouteData(msg);   break;
             case CFG_ROUTE_END_ID:       handleRouteEnd(msg);    break;
@@ -174,6 +175,23 @@ bool checkRoutes(const can_msg_t *msg, router_action_t *out)
             case CFG_ROUTE_PURGE_ID:     handleRoutePurge(msg);  break;
             case CFG_ROUTE_WRITE_NVS_ID: handleRouteWriteNVS();  break;
             case CFG_ROUTE_READ_NVS_ID:  handleRouteReadNVS();   break;
+
+            /* ---------------- PRODUCER CONFIG ---------------- */
+            case CFG_PRODUCER_CFG_ID:        handleProducerCfg(msg);     break;
+            case CFG_PRODUCER_PURGE_ID:      handleProducerPurge();      break;
+            case CFG_PRODUCER_DEFAULTS_ID:   handleProducerDefaults();   break;
+            case REQ_PRODUCER_CFG_ID:        handleReqProducerCfg(msg);  break;
+
+            /* ---------------- PRODUCER STATE OPS ---------------- */
+            case CFG_PRODUCER_DELETE_ID:    producerDelete(msg->data[MSG_DATA_4]); break;
+            case CFG_PRODUCER_ENABLE_ID:    producerEnable(msg->data[MSG_DATA_4]); break;
+            case CFG_PRODUCER_DISABLE_ID:   producerDisable(msg->data[MSG_DATA_4]); break;
+            case CFG_PRODUCER_TOGGLE_ID:    producerToggle(msg->data[MSG_DATA_4]); break; 
+
+            /* ---------------- PRODUCER NVS OPS ---------------- */
+            case CFG_PRODUCER_WRITE_NVS_ID:  requestProducerSave();      break;
+            case CFG_PRODUCER_READ_NVS_ID:   requestProducerLoad();      break;
+
             default: break;
         }
 
