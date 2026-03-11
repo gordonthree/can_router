@@ -48,8 +48,6 @@ typedef enum {
     EVENT_ON_MATCH       /**< Fire when payload matches parameters[] */
 } event_type_t;
 
-
-
 typedef enum {
     ROUTE_PARAM_0 = 0,
     ROUTE_PARAM_1,
@@ -71,6 +69,14 @@ typedef struct {
 extern route_entry_t   g_routes[MAX_ROUTES];
 extern volatile bool g_routeSaveRequested;
 extern volatile bool g_routeLoadRequested;
+
+/* ============================================================================
+ *  C LINKAGE
+ * ========================================================================== */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* ============================================================================
  *  ROUTING API
@@ -99,8 +105,9 @@ void handleRouteWriteNVS(void);
 void handleRouteReadNVS(void);
 
 /* ============================================================================
- *  NVS LOAD/SAVE API (platform-specific)
+ *  END C LINKAGE
  * ========================================================================== */
 
-void loadRouteTableFromNVS(void);
-void saveRouteTableToNVS(void);
+#ifdef __cplusplus
+}
+#endif
