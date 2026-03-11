@@ -57,18 +57,6 @@ typedef enum {
     ROUTE_PARAM_3
 } route_param_t;
 
-typedef enum {
-    MSG_DATA_0 = 0,
-    MSG_DATA_1,
-    MSG_DATA_2,
-    MSG_DATA_3,
-    MSG_DATA_4,
-    MSG_DATA_5,
-    MSG_DATA_6,
-    MSG_DATA_7
-} msg_data_t;
-
-
 typedef struct {
     uint16_t actionMsgId;                       // Action is based on existing 16-bit CAN-bus message IDs
     uint8_t  valid;                             // 1 = action exists
