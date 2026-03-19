@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "can_platform.h" /**< Platform specific aliases, can_msg_t becomes twai_message_t on esp32 */
+#include "can_platform.h"   /**< Platform specific aliases, can_msg_t becomes twai_message_t on esp32 */
 #include "canbus_project.h" /**< required for can message definitions */
 
 /* ============================================================================
@@ -14,7 +14,7 @@
 #define ROUTE_ACTION_PARAM_LEN     (4U)
 #define ROUTE_TAKE_NO_ACTION       (0xFFFFU)
 #define ROUTE_CMD_START            (0x300U)
-#define ROUTE_CMD_END              (0x3FFU)
+#define ROUTE_CMD_END              (0x31FU)
 
 /* ============================================================================
  *  DATA STRUCTURES
