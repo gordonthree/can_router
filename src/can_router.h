@@ -15,8 +15,14 @@
 #define ROUTE_ENTRY_SOURCE_ID_LEN  (4U)
 #define ROUTE_ACTION_PARAM_LEN     (4U)
 #define ROUTE_TAKE_NO_ACTION       (0xFFFFU)
+#define ROUTE_RX_COMPLETE          (0x303U)
 #define ROUTE_CMD_START            (0x300U)
 #define ROUTE_CMD_END              (0x31FU)
+#define ROUTE_DATA_PAYLOAD_LEN     (3U)
+#define ROUTE_INVALID_RX           (0xFFU)
+#define ROUTE_ENTRY_SIZE           (sizeof(route_entry_t)) /**< size of a single route entry */
+#define ROUTE_CHUNK_SIZE           3                       /**< payload bytes per route entry */
+#define ROUTE_CHUNKS_PER_ROUTE     ((ROUTE_ENTRY_SIZE + ROUTE_CHUNK_SIZE - 1) / ROUTE_CHUNK_SIZE)
 
 /* ============================================================================
  *  DATA STRUCTURES
@@ -42,6 +48,15 @@ typedef struct {
     uint8_t  enabled;            /* enabled flag */
 } route_entry_t;
 
+
+
+/* structure to hold route entry crc and timestamp */
+typedef struct {
+    bool     in_use; /**< in use flag */
+    uint16_t crc;    /**< 16-bit CRC */
+    uint32_t ts;     /**< UNIX Timestamp */
+} route_entry_crc_t;
+
 typedef enum {
     EVENT_ALWAYS,        /**< Fire on every matching message */
     EVENT_ON_CHANGE,     /**< Fire only when payload changes */
@@ -59,6 +74,7 @@ typedef enum {
 
 typedef struct {
     uint16_t actionMsgId;                       // Action is based on existing 16-bit CAN-bus message IDs
+    uint8_t  actionMsgDlc;                      /**< Data length code for action message */
     uint8_t  valid;                             // 1 = action exists
     uint8_t  sub_idx;                           // which submodule to act on
     uint8_t  param[ROUTE_ACTION_PARAM_LEN];     // small parameter block
@@ -68,9 +84,28 @@ typedef struct {
  *  GLOBALS
  * ========================================================================== */
 
-extern route_entry_t   g_routes[MAX_ROUTES];
-extern volatile bool g_routeSaveRequested;
-extern volatile bool g_routeLoadRequested;
+extern route_entry_t     g_routes[MAX_ROUTES];
+extern route_entry_crc_t g_routesCrc[MAX_ROUTES];
+
+extern volatile bool     g_routeSaveRequested;
+extern volatile bool     g_routeLoadRequested;
+
+/* ============================================================================
+ *  CALLBACK INTERFACE
+ * ========================================================================== */
+
+/* access the CRC routine provided by the application */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef uint16_t (*router_crc_fn_t)(const uint8_t *data, uint16_t length);
+
+void router_set_crc_callback(router_crc_fn_t fn);
+
+#ifdef __cplusplus
+}
+#endif
 
 /* ============================================================================
  *  C LINKAGE
@@ -93,11 +128,11 @@ bool detect_change(const can_msg_t *msg, uint8_t idx);
  *  ROUTE CONFIGURATION HANDLERS
  * ========================================================================== */
 
-void handleRouteBegin(const  can_msg_t *msg);
-void handleRouteData(const   can_msg_t *msg);
-void handleRouteEnd(const    can_msg_t *msg);
-void handleRouteDelete(const can_msg_t *msg);
-void handleRoutePurge(const  can_msg_t *msg);
+void    handleRouteBegin(const  can_msg_t *msg);
+void    handleRouteData(const   can_msg_t *msg);
+uint8_t handleRouteEnd(const    can_msg_t *msg);
+void    handleRouteDelete(const can_msg_t *msg);
+void    handleRoutePurge(const  can_msg_t *msg);
 
 /* ============================================================================
  *  HELPER AND WRAPPER FUNCTIONS
