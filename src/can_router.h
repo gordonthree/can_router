@@ -10,7 +10,7 @@
  *  CONSTANTS
  * ========================================================================== */
 
-#define MAX_ROUTES                 (8U)
+#define MAX_ROUTES                 (MAX_SUB_MODULES * 2)
 #define ROUTE_ENTRY_PARAM_LEN      (8U)
 #define ROUTE_ENTRY_SOURCE_ID_LEN  (4U)
 #define ROUTE_ACTION_PARAM_LEN     (4U)
