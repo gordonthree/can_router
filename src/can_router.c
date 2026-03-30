@@ -1,5 +1,8 @@
 #include "can_router.h"
 
+#include "esp_log.h"
+
+const char* TAG = "can_router";
 
 bool detect_change(const can_msg_t *msg, uint8_t idx);
 bool payload_matches_parameters(const can_msg_t *msg, uint8_t idx);
@@ -106,7 +109,7 @@ void handleRouteBegin(const can_msg_t *msg)
     g_routesCrc[route_idx].in_use = false;          /* reset in_use flag */
 
     memset(&rxRouteBuffer, 0, sizeof(rxRouteBuffer));
-    printf("[ROUTER] Route begin: %d, %d\n", route_idx, total_chunks);
+    ESP_LOGI(TAG, "[ROUTER] Route begin: %d, %d", route_idx, total_chunks);
 }
 
 void handleRouteData(const can_msg_t *msg)
@@ -142,24 +145,24 @@ uint8_t handleRouteEnd(const can_msg_t *msg)
     uint8_t commitFlag = msg->data[5];
 
     if (route_idx != rxRouteSlot) {
-        printf("[ROUTER] Error: route_idx (%d) != rxRouteSlot (%d)\n", route_idx, rxRouteSlot);
+        ESP_LOGW(TAG, "[ROUTER] Error: route_idx (%d) != rxRouteSlot (%d)", route_idx, rxRouteSlot);
         return ROUTE_INVALID_RX;
     }
 
     if (!commitFlag) {
-        printf("[ROUTER] Error: commit flag not set\n");
+        ESP_LOGW(TAG, "[ROUTER] Error: commit flag not set");
         return ROUTE_INVALID_RX;   // ignore incomplete transfers
     }
 
     if (rxRouteReceived != rxRouteTotal) {
-        printf("[ROUTER] Error: rxRouteReceived (%d) != rxRouteTotal (%d)\n", rxRouteReceived, rxRouteTotal);
+        ESP_LOGW(TAG, "[ROUTER] Error: rxRouteReceived (%d) != rxRouteTotal (%d)", rxRouteReceived, rxRouteTotal);
         return ROUTE_INVALID_RX;   // incomplete or missing chunks
     }
 
     memcpy(&g_routes[rxRouteSlot], &rxRouteBuffer, sizeof(route_entry_t));
     g_routes[rxRouteSlot].enabled = 1;
 
-    printf("[ROUTER] Route %d programmed\n", rxRouteSlot);    
+    ESP_LOGI(TAG, "[ROUTER] Route %d programmed", rxRouteSlot);    
     
     const uint8_t savedIdx = rxRouteSlot;
     
@@ -231,7 +234,7 @@ bool checkRoutes(const can_msg_t *msg, router_action_t *out)
     if (msg->identifier >= ROUTE_CMD_START && msg->identifier <= ROUTE_CMD_END)
     {
 
-        printf("[ROUTER] CONFIG MESSAGE: 0x%03X\n", msg->identifier);
+        ESP_LOGI(TAG, "[ROUTER] CONFIG MESSAGE: 0x%03X", msg->identifier);
 
         switch (msg->identifier)
         {
@@ -245,7 +248,7 @@ bool checkRoutes(const can_msg_t *msg, router_action_t *out)
         case CFG_ROUTE_END_ID:
         {
             const uint8_t rxIdx = handleRouteEnd(msg);
-            // printf("[ROUTER] handleRouteEnd returned index: %d\n", rxIdx);
+            ESP_LOGD(TAG, "[ROUTER] handleRouteEnd returned index: %d", rxIdx);
 
             if (rxIdx != ROUTE_INVALID_RX) { /* test if route saved successfully, if so send ack */
                 out->valid        = 1;
