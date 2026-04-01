@@ -100,8 +100,10 @@ extern "C" {
 #endif
 
 typedef uint16_t (*router_crc_fn_t)(const uint8_t *data, uint16_t length);
+// typedef void (*lib_log_fn_t)(int level, const char *fmt, ...);
 
 void router_set_crc_callback(router_crc_fn_t fn);
+// void libSetLogger(lib_log_fn_t fn);
 
 #ifdef __cplusplus
 }
@@ -120,26 +122,11 @@ extern "C" {
  * ========================================================================== */
 
 bool checkRoutes(const can_msg_t *msg, router_action_t *out);
-bool evaluate_event(const uint8_t idx, const can_msg_t *msg);
-bool payload_matches_parameters(const can_msg_t *msg, uint8_t idx);
-bool detect_change(const can_msg_t *msg, uint8_t idx);
+uint8_t routerGetRouteCount(void);
+uint8_t routerGetEnabledRouteCount(void);
+uint8_t routerGetMaxRouteCount(void);
+void prettyPrintRoutes(void);
 
-/* ============================================================================
- *  ROUTE CONFIGURATION HANDLERS
- * ========================================================================== */
-
-void    handleRouteBegin(const  can_msg_t *msg);
-void    handleRouteData(const   can_msg_t *msg);
-uint8_t handleRouteEnd(const    can_msg_t *msg);
-void    handleRouteDelete(const can_msg_t *msg);
-void    handleRoutePurge(const  can_msg_t *msg);
-
-/* ============================================================================
- *  HELPER AND WRAPPER FUNCTIONS
- * ========================================================================== */
-
-void handleRouteWriteNVS(void);
-void handleRouteReadNVS(void);
 
 /* ============================================================================
  *  END C LINKAGE
