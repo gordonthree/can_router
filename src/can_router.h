@@ -28,30 +28,38 @@
  *  DATA STRUCTURES
  * ========================================================================== */
 
-typedef struct {
+typedef struct __attribute__((packed)) {
+    /* Source information fields */
+    uint32_t source_node_id;                             /* source (producer) node ID */
+    uint16_t source_msg_id;                              /* source CAN message ID */
+    uint8_t  source_msg_dlc;                             /* source DLC */
+    uint8_t  source_sub_idx;                             /* source submodule index */
+    
+    /* Target information fields */
+    uint16_t target_msg_id;                              /* target CAN message ID */
+    uint8_t  target_msg_dlc;                             /* target DLC */
+    uint8_t  target_sub_idx;                             /* target submodule index */
+    
+    /* Routing information fields */
+    uint8_t  event_type;                                 /* event type */
+    uint8_t  action_type;                                /* action type */
+    
+    /* Routing configuration */
     uint8_t  parameters[ROUTE_ENTRY_PARAM_LEN];          /* configuration parameters (8 bytes) */
-    uint8_t  source_node_id[ROUTE_ENTRY_SOURCE_ID_LEN];  /* producer node ID (4 bytes) */
+    uint8_t  param_len;                                  /* number of parameter bytes used */
 
-    uint16_t source_msg_id;      /* source CAN message ID */
-    uint16_t target_msg_id;      /* target CAN message ID */
-    uint8_t  source_msg_dlc;     /* source DLC */
-    uint8_t  target_msg_dlc;     /* target DLC */
+    /* Routing state */
+    uint8_t  wildcard;                                   /* listen to all producers */
+    uint8_t  enabled;                                    /* route enabled flag */
 
-    uint8_t  source_sub_idx;     /* source submodule index */
-    uint8_t  target_sub_idx;     /* target submodule index */
-
-    uint8_t  event_type;         /* event type */
-    uint8_t  action_type;        /* action type */
-
-    uint8_t  param_len;          /* number of parameter bytes used */
-
-    uint8_t  enabled;            /* enabled flag */
+    uint16_t reserved;                                   /* 2-bytes of padding */
+    
 } route_entry_t;
 
 
 
 /* structure to hold route entry crc and timestamp */
-typedef struct {
+typedef struct __attribute__((packed)) {
     bool     in_use; /**< in use flag */
     uint16_t crc;    /**< 16-bit CRC */
     uint32_t ts;     /**< UNIX Timestamp */
@@ -65,20 +73,16 @@ typedef enum {
     EVENT_ON_MATCH       /**< Fire when payload matches parameters[] */
 } event_type_t;
 
-typedef enum {
-    ROUTE_PARAM_0 = 0,
-    ROUTE_PARAM_1,
-    ROUTE_PARAM_2,
-    ROUTE_PARAM_3
-} route_param_t;
-
 typedef struct {
-    uint16_t actionMsgId;                       // Action is based on existing 16-bit CAN-bus message IDs
-    uint8_t  actionMsgDlc;                      /**< Data length code for action message */
-    uint8_t  valid;                             // 1 = action exists
-    uint8_t  sub_idx;                           // which submodule to act on
-    uint8_t  param[ROUTE_ACTION_PARAM_LEN];     // small parameter block
+    uint16_t actionMsgId;   // 16-bit CAN message ID
+    uint8_t  actionMsgDlc;  // DLC for synthetic message
+    uint8_t  valid;         // 1 = action exists
+    uint8_t  sub_idx;       // submodule index byte 4
+    uint8_t  param0;        // byte 5
+    uint8_t  param1;        // byte 6
+    uint8_t  param2;        // byte 7
 } router_action_t;
+
 
 /* ============================================================================
  *  GLOBALS
@@ -105,28 +109,20 @@ typedef uint16_t (*router_crc_fn_t)(const uint8_t *data, uint16_t length);
 void router_set_crc_callback(router_crc_fn_t fn);
 // void libSetLogger(lib_log_fn_t fn);
 
-#ifdef __cplusplus
-}
-#endif
 
-/* ============================================================================
- *  C LINKAGE
- * ========================================================================== */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* ============================================================================
  *  ROUTING API
  * ========================================================================== */
 
-bool checkRoutes(const can_msg_t *msg, router_action_t *out);
+bool checkRoutes(can_msg_t *msg, router_action_t *out);
 uint8_t routerGetRouteCount(void);
 uint8_t routerGetEnabledRouteCount(void);
 uint8_t routerGetMaxRouteCount(void);
 void prettyPrintRoutes(void);
-
+int serializeAllRoutes(can_msg_t *out, int maxMsgs);
+int routerGetActiveRouteCount(void);
+uint16_t routerGetMsgsPerRoute(void);
 
 /* ============================================================================
  *  END C LINKAGE
