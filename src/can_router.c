@@ -1,8 +1,5 @@
 #include "can_router.h"
 
-#include "esp_log.h"
-
-const char *TAG = "can_router";
 
 typedef bool (*binary_predicate_fn)(uint32_t old_val, uint32_t new_val);
 
@@ -15,6 +12,7 @@ static uint32_t pack_payload(const can_msg_t *msg);
 static uint32_t pack_full_payload(const can_msg_t *msg);
 static uint8_t countActiveRoutes(void);
 static inline uint8_t get_binary_state(uint8_t idx);
+static void router_logf(const char *fmt, ...);
 
 /* action generator functions */
 static void action_generator(const route_entry_t *r, const uint8_t idx,
@@ -122,6 +120,21 @@ void router_set_log_callback(router_log_fn_t fn) {
 /* ============================================================================
  *  HELPER FUNCTIONS
  * ========================================================================== */
+
+/** @brief Provide a printf style logging function that connects to the router log callback */
+static void router_logf(const char *fmt, ...)
+{
+    if (!g_router_log_cb)
+        return;
+
+    char buf[96];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    g_router_log_cb(buf);
+}
 
 /**
  * @brief Pack 3 bytes of a CAN message into a single 32-bit value
@@ -638,10 +651,10 @@ static int serializeRoute(uint8_t route_idx, can_msg_t *out, int maxMsgs) {
  * ========================================================================== */
 
 static void handleRouteBegin(const can_msg_t *msg) {
-  // printf("[ROUTER] handleRouteBegin()\n");
+  // router_logf("[ROUTER] handleRouteBegin()\n");
 
   if (msg->data_length_code < (uint8_t)CFG_ROUTE_BEGIN_DLC) {
-    printf("[ROUTER] Error: invalid data length code, command %u ignored\n",
+    router_logf("[ROUTER] Error: invalid data length code, command %u ignored\n",
            msg->identifier);
     return;
   }
@@ -652,13 +665,13 @@ static void handleRouteBegin(const can_msg_t *msg) {
       msg->data[5]; /* data byte 5 is the total chunk count */
 
   if (route_idx >= (uint8_t)MAX_ROUTES) {
-    printf("[ROUTER] Error: invalid route index, command %u ignored\n",
+    router_logf("[ROUTER] Error: invalid route index, command %u ignored\n",
            msg->identifier);
     return;
   }
 
   if (total_chunks != (uint8_t)ROUTE_CHUNKS_PER_ROUTE) {
-    printf("[ROUTER] Error: invalid chunk count %u we expected %u, command %u "
+    router_logf("[ROUTER] Error: invalid chunk count %u we expected %u, command %u "
            "ignored\n",
            total_chunks, (uint8_t)ROUTE_CHUNKS_PER_ROUTE, msg->identifier);
     return;
@@ -674,7 +687,7 @@ static void handleRouteBegin(const can_msg_t *msg) {
   routerSetRouteEnableFlag(route_idx, false); /* reset enabled flag */
 
   memset(&rxRouteBuffer, 0, sizeof(rxRouteBuffer));
-  printf("[ROUTER] Route begin, index: %u chunks: %u\n", route_idx,
+  router_logf("[ROUTER] Route begin, index: %u chunks: %u\n", route_idx,
          total_chunks);
 }
 
@@ -701,7 +714,7 @@ static void handleRouteData(const can_msg_t *msg) {
     dst[base + 2] = msg->data[7];
 
   rxRouteReceived++; // <-- NEW: count chunks
-  printf("[ROUTER] Route data: Route %u chunk received %u\n", rxRouteReceived,
+  router_logf("[ROUTER] Route data: Route %u chunk received %u\n", rxRouteReceived,
          chunk_idx);
 }
 
@@ -714,18 +727,18 @@ static uint8_t handleRouteEnd(const can_msg_t *msg) {
   uint8_t commitFlag = msg->data[5];
 
   if (route_idx != rxRouteSlot) {
-    ESP_LOGW(TAG, "[ROUTER] Error: route_idx (%u) != rxRouteSlot (%u)",
+    router_logf("[ROUTER] Error: route_idx (%u) != rxRouteSlot (%u)",
              route_idx, rxRouteSlot);
     return ROUTE_INVALID_RX;
   }
 
   if (!commitFlag) {
-    ESP_LOGW(TAG, "[ROUTER] Error: commit flag not set");
+    router_logf("[ROUTER] Error: commit flag not set");
     return ROUTE_INVALID_RX; // ignore incomplete transfers
   }
 
   if (rxRouteReceived != rxRouteTotal) {
-    ESP_LOGW(TAG, "[ROUTER] Error: rxRouteReceived (%u) != rxRouteTotal (%u)",
+    router_logf("[ROUTER] Error: rxRouteReceived (%u) != rxRouteTotal (%u)",
              rxRouteReceived, rxRouteTotal);
     return ROUTE_INVALID_RX; // incomplete or missing chunks
   }
@@ -734,7 +747,7 @@ static uint8_t handleRouteEnd(const can_msg_t *msg) {
   routerSetRouteEnableFlag(
       rxRouteSlot, true); /* set enabled flag even if the sender did not */
 
-  ESP_LOGI(TAG, "[ROUTER] Route %u programming complete", rxRouteSlot);
+  router_logf("[ROUTER] Route %u programming complete", rxRouteSlot);
 
   const uint8_t savedIdx = rxRouteSlot;
 
@@ -769,7 +782,7 @@ static bool routeValidateSave(const uint8_t rxIdx, router_action_t *out) {
     out->param0 = ((g_routeCrc[rxIdx].crc >> 8) & 0xFF);
     out->param1 = (g_routeCrc[rxIdx].crc & 0xFF);
     out->param2 = 0; // zero it out, not used
-    printf("[ROUTER] Route index: %u saved with CRC16: 0x%04X\n", rxIdx,
+    router_logf("[ROUTER] Route index: %u saved with CRC16: 0x%04X\n", rxIdx,
            g_routeCrc[rxIdx].crc);
 
     return true;
@@ -779,7 +792,7 @@ static bool routeValidateSave(const uint8_t rxIdx, router_action_t *out) {
   out->valid = 1; /* valid command */
   /* router commands have no action in the consumer */
   out->actionMsgId = ROUTE_TAKE_NO_ACTION;
-  printf("[ROUTER] Route index: %u save failed.\n", rxIdx);
+  router_logf("[ROUTER] Route index: %u save failed.\n", rxIdx);
 
   return false;
 }
@@ -844,7 +857,7 @@ static bool process_router_command(const can_msg_t *msg, uint8_t *rxIdx_out,
     case CFG_ROUTE_READ_NVS_ID: handleRouteReadNVS(); return true;
 
     default:
-      printf("[ROUTER] INVALID CONFIG MESSAGE: 0x%03X\n", msg->identifier);
+      router_logf("[ROUTER] INVALID CONFIG MESSAGE: 0x%03X\n", msg->identifier);
       return true; // still consumed
   }
 }
@@ -859,7 +872,7 @@ bool checkRoutes(can_msg_t *msg, router_action_t *out) {
   out->param1 = 0;
   out->param2 = 0;
 
-  // printf("[ROUTER] CHECKING MESSAGE: 0x%03X\n", msg->identifier);
+  // router_logf("[ROUTER] CHECKING MESSAGE: 0x%03X\n", msg->identifier);
 
   /* ---------------------------------------------------------
    * CONFIGURATION COMMANDS (0x300–0x3FF)
@@ -1133,25 +1146,25 @@ uint8_t routerGetEnabledRouteCount(void) { return countEnabledRoutes(); }
  * the routing table, based on the struct route_entry_t */
 
 void prettyPrintRoutes(void) {
-  printf("[ROUTER] Routing Table:\n");
+  router_logf("[ROUTER] Routing Table:\n");
   for (uint8_t i = 0; i < MAX_ROUTES; i++) {
     if (routerIsRouteInUse(i)) {
-      printf("  Route %u: Enabled: %c\n", i,
+      router_logf("  Route %u: Enabled: %c\n", i,
              routerIsRouteEnabled(i) ? 'Y' : 'N');
-      printf("    CRC: 0x%04X\n", g_routeCrc[i].crc);
-      printf("    Source Node Id: 0x%08X\n", g_routes[i].source_node_id);
-      printf("    Source: msg_id = 0x%03X, sub_idx = %u, event_type = %u\n",
+      router_logf("    CRC: 0x%04X\n", g_routeCrc[i].crc);
+      router_logf("    Source Node Id: 0x%08X\n", g_routes[i].source_node_id);
+      router_logf("    Source: msg_id = 0x%03X, sub_idx = %u, event_type = %u\n",
              g_routes[i].source_msg_id, g_routes[i].source_sub_idx,
              g_routes[i].ea.bits.event_type);
-      printf("    Target: msg_id = 0x%03X, sub_idx = %u, action_type = %u\n",
+      router_logf("    Target: msg_id = 0x%03X, sub_idx = %u, action_type = %u\n",
              g_routes[i].target_msg_id, g_routes[i].target_sub_idx),
           g_routes[i].ea.bits.action_type;
-      printf("    match_value: %lu, match_mask: %lu\n", g_routes[i].match_value,
+      router_logf("    match_value: %lu, match_mask: %lu\n", g_routes[i].match_value,
              g_routes[i].match_mask);
-      printf("    Payload parameters: 0: 0x%02X 1: 0x%02X 2: 0x%02X\n ",
+      router_logf("    Payload parameters: 0: 0x%02X 1: 0x%02X 2: 0x%02X\n ",
              g_routes[i].parameters[0], g_routes[i].parameters[1],
              g_routes[i].parameters[2]);
-      printf("    Reserved bytes: 0: 0x%02X 1: 0x%02X\n",
+      router_logf("    Reserved bytes: 0: 0x%02X 1: 0x%02X\n",
              g_routes[i].reserved[0], g_routes[i].reserved[1]);
     }
   }
