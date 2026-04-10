@@ -203,8 +203,6 @@ void router_set_timestamp_callback(router_timestamp_fn_t fn);
 /* logging callback */
 typedef void (*router_log_fn_t)(const char *msg);
 
-extern router_log_fn_t g_router_log_cb;
-
 void router_set_log_callback(router_log_fn_t fn);
 
 /* Global accessor installed by firmware */
