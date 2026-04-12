@@ -205,8 +205,6 @@ typedef void (*router_log_fn_t)(const char *msg);
 
 void router_set_log_callback(router_log_fn_t fn);
 
-/* Global accessor installed by firmware */
-// extern router_timestamp_fn_t g_timestamp_cb;
 
 // static inline route_entry_crc_t makeSanitizedRouteEntryData(const
 // route_entry_crc_t *src)
@@ -226,7 +224,7 @@ void router_set_log_callback(router_log_fn_t fn);
  *  ROUTING API
  * ========================================================================== */
 
-bool checkRoutes(can_msg_t *msg, router_action_t *out);
+bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out);
 bool routerIsRouteInUse(const uint8_t i);
 bool routerIsRouteEnabled(const uint8_t i);
 void routerSetRouteUseFlag(const uint8_t i, const bool use);

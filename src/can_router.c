@@ -7,6 +7,7 @@ typedef bool (*binary_predicate_fn)(uint32_t old_val, uint32_t new_val);
  * ========================================================================== */
 
 /* helpers */
+static uint32_t pack_bytes_u32(const uint8_t bytes[4]);
 static uint32_t pack_payload(const can_msg_t *msg);
 static uint32_t pack_full_payload(const can_msg_t *msg);
 static uint8_t countActiveRoutes(void);
@@ -35,6 +36,8 @@ static bool pred_binary_rising(uint32_t old_val, uint32_t new_val);
 static bool pred_binary_falling(uint32_t old_val, uint32_t new_val);
 
 /* comparison functions */
+static bool detect_always(const can_msg_t *msg, uint8_t idx);
+static bool detect_never(const can_msg_t *msg, uint8_t idx);
 static bool detect_binary_event(const can_msg_t *msg, uint8_t idx,
                                 binary_predicate_fn pred);
 static bool detect_binary_rising(const can_msg_t *msg, uint8_t idx);
@@ -169,6 +172,24 @@ static uint32_t pack_full_payload(const can_msg_t *msg) {
   return packed;
 }
 
+static uint32_t pack_bytes_u32(const uint8_t bytes[4]) 
+{
+  uint32_t packed = 0;
+  packed |= (uint32_t)bytes[MSG_DATA_0] << 24;   /* MSB */
+  packed |= (uint32_t)bytes[MSG_DATA_1] << 16;   /* next */
+  packed |= (uint32_t)bytes[MSG_DATA_2] << 8;    /* next */
+  packed |= (uint32_t)bytes[MSG_DATA_3] & 0xFF;  /* LSB */
+  return packed;
+}
+
+/**
+ * @brief Return the least significant bit of the last observed payload
+ * @param idx Index into the route data array
+ * @return The least significant bit of the last observed payload
+ *
+ * This function is used by the router to quickly determine the state
+ * of a binary event (e.g. button press).
+ */
 static inline uint8_t get_binary_state(uint8_t idx) {
   return (g_routeData[idx].last_payload & 0x01U); /* return LSB only */
 }
@@ -251,6 +272,42 @@ static bool detect_binary_match(const can_msg_t *msg, uint8_t idx) {
   g_routeData[idx].last_payload = incoming;    /* update lastPayload */
 
   return (incoming == r->match_value);
+}
+
+/**
+ * @brief Always return true, disregarding the incoming message.
+ *
+ * This function stores the payload in last_payload and returns true.
+ *
+ * @param msg The CAN message to check.
+ * @param idx The index of the route entry to check against.
+ *
+ * @return true
+ */
+static bool detect_always(const can_msg_t *msg, uint8_t idx) { /* always return true */
+  const route_entry_t *r = &g_routes[idx];
+  const uint32_t incoming = pack_payload(msg); /* pack 3-byte payload */
+  g_routeData[idx].last_payload = incoming;    /* update lastPayload */
+
+  return (true);
+}
+
+/**
+ * @brief Always return false, disregarding the incoming message.
+ *
+ * This function stores the payload in last_payload and returns false.
+ *
+ * @param msg The CAN message to check.
+ * @param idx The index of the route entry to check against.
+ *
+ * @return false
+ */
+static bool detect_never(const can_msg_t *msg, uint8_t idx) { /* always return false */
+  const route_entry_t *r = &g_routes[idx];
+  const uint32_t incoming = pack_payload(msg); /* pack 3-byte payload */
+  g_routeData[idx].last_payload = incoming;    /* update lastPayload */
+
+  return (false);
 }
 
 /**
@@ -717,7 +774,7 @@ static void handleRouteData(const can_msg_t *msg) {
 
 static uint8_t handleRouteEnd(const can_msg_t *msg) {
 
-  if (msg->data_length_code < 6)
+  if (msg->data_length_code < CFG_ROUTE_END_DLC)
     return ROUTE_INVALID_RX;
 
   uint8_t route_idx = msg->data[4];
@@ -820,6 +877,9 @@ static void handleRouteReadNVS(void) { g_routeLoadRequested = true; }
 
 static bool process_router_command(const can_msg_t *msg, 
                                    router_action_t *out) {
+
+  if (msg->isLocal) return false;
+
   switch (msg->identifier) {
     /* Internally handled commands must return false */
 
@@ -849,6 +909,11 @@ static bool process_router_command(const can_msg_t *msg,
 
         return false; /* route config transfer did not complete successfully */
       }
+    case DATA_ROUTE_ACK_ID:
+      out->valid = 1;
+      out->actionMsgId = ROUTE_TAKE_NO_ACTION;
+      out->actionMsgDlc = 0;
+      return true;
 
     case REQ_ROUTE_LIST_ID:
     //   out->valid = 1;
@@ -862,7 +927,7 @@ static bool process_router_command(const can_msg_t *msg,
   }
 }
 
-bool checkRoutes(can_msg_t *msg, router_action_t *out) {
+bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out) {
 
   // Default: no action
   out->valid = 0;
@@ -881,6 +946,10 @@ bool checkRoutes(can_msg_t *msg, router_action_t *out) {
   if (msg->identifier >= ROUTE_CMD_START &&
       msg->identifier <= ROUTE_CMD_END) // command message is between 0x300 and 0x31F
   {
+    const uint32_t targetNodeID = pack_bytes_u32(&msg->data[0]);
+    if (targetNodeID != my_node_id)
+        return false;   // not for us
+
     return process_router_command(msg,  out);
   }
 
@@ -899,7 +968,8 @@ bool checkRoutes(can_msg_t *msg, router_action_t *out) {
     if (msg->identifier != r->source_msg_id)
       continue;
 
-    //   router_logf("[checkRoutes] CHECKING MESSAGE: 0x%03X\n", msg->identifier);
+    router_logf("[checkRoutes] msg: 0x%03X d4: %u d5: %u d6: %u d7: %u", msg->identifier, 
+                msg->data[MSG_DATA_4], msg->data[MSG_DATA_5], msg->data[MSG_DATA_6], msg->data[MSG_DATA_7]);
 
     /* retrieve source node ID from payload, formatted big endian */
     const uint32_t sourceNodeId =
@@ -919,9 +989,13 @@ bool checkRoutes(can_msg_t *msg, router_action_t *out) {
     if (!er.matched)
       continue;
 
+    router_logf("[checkRoutes] MATCHED ROUTE: %u VALUE: %lu\n", i, er.value);
+
     /* Generate semantic action */
     action_generator(r, i, out);
 
+    router_logf("[checkRoutes] ACTION: 0x%03X IDX: %u PAYLOAD: d5: 0x%02X d6: 0x%02X d7: 0x%02X \n", 
+      out->actionMsgId, out->sub_idx, out->param0, out->param1, out->param2);
     return true; /* route matched and has data for the consumer */
   }
 
@@ -960,7 +1034,7 @@ static event_result_t evaluate_event(const uint8_t idx, const can_msg_t *msg) {
   switch (r->ea.bits.event_type) {
     case EVENT_ALWAYS:
       {
-        return_value = true;
+        return_value = detect_always(msg, idx);
         break;
       }
     case EVENT_ON_BINARY_CHANGE:
@@ -1073,19 +1147,25 @@ static event_result_t evaluate_event(const uint8_t idx, const can_msg_t *msg) {
       }
 
     case EVENT_NEVER: /* bookend event type 31 */
+    {
+      return_value = detect_never(msg, idx);
+      break;
+    
+    }
     default:
       {
+        router_logf("[ROUTER] Invalid event type: %u", r->ea.bits.event_type);
         return_value = false;
         break;
       }
   }
 
   er.matched = return_value;
-  er.value = 0;
+  er.value = g_routeData[idx].last_payload;
 
   if (return_value) {
     g_routeData[idx].hit_count++;
-
+    
     if (g_timestamp_cb)
       g_routeData[idx].ts_matched = g_timestamp_cb();
     else
