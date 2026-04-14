@@ -9,7 +9,8 @@ typedef bool (*binary_predicate_fn)(uint32_t old_val, uint32_t new_val);
 /* helpers */
 static uint32_t pack_bytes_u32(const uint8_t bytes[4]);
 static uint32_t pack_payload(const can_msg_t *msg);
-static uint32_t pack_full_payload(const can_msg_t *msg);
+static uint32_t pack_full_payload_le(const can_msg_t *msg);
+static uint32_t pack_full_payload_be(const can_msg_t *msg);
 static uint8_t countActiveRoutes(void);
 static inline uint8_t get_binary_state(uint8_t idx);
 static void router_logf(const char *fmt, ...);
@@ -29,6 +30,12 @@ static void generate_action_send_static_payload(const route_entry_t *r,
 static void generate_action_send_dynamic_payload(const route_entry_t *r,
                                                  uint8_t idx,
                                                  router_action_t *out);
+
+static void generate_action_32bit_payload(const route_entry_t *r, uint8_t idx,
+                                          router_action_t *out);
+
+static void generate_action_64bit_payload(const route_entry_t *r, uint8_t idx,
+                                          router_action_t *out);
 
 /* predicate functions */
 static bool pred_binary_change(uint32_t old_val, uint32_t new_val);
@@ -52,8 +59,7 @@ static bool detect_masked_binary_match_full(const can_msg_t *msg, uint8_t idx);
 static event_result_t evaluate_event(const uint8_t idx, const can_msg_t *msg);
 
 /* message and command handlers */
-static bool process_router_command(const can_msg_t *msg, 
-                                   router_action_t *out);
+static bool process_router_command(const can_msg_t *msg, router_action_t *out);
 
 static void handleRouteBegin(const can_msg_t *msg);
 static void handleRouteData(const can_msg_t *msg);
@@ -67,7 +73,11 @@ static void handleRouteWriteNVS(void);
 static void handleRouteReadNVS(void);
 
 /* serialization */
-static int serializeRoute(uint8_t route_idx, can_msg_t *out, int maxMsgs);
+static inline void write_node_id(can_msg_t *msg, const uint32_t node_id);
+static int router_serialize_route(const uint32_t node_id, uint8_t route_idx, can_msg_t *out,
+                                  int maxMsgs);
+static int router_route_list_header(int count, const uint32_t node_id, uint8_t active_route_count, int total_msg_count, can_msg_t *out);
+static int router_route_list_footer(int count, const uint32_t node_id, uint8_t active_route_count, int total_msg_count, can_msg_t *out);
 
 /* ============================================================================
  *  GLOBAL STORAGE
@@ -163,7 +173,7 @@ static uint32_t pack_payload(const can_msg_t *msg) {
  *   - Next byte: `msg->data[MSG_DATA_6]` shifted left by 16 bits
  *   - MSB: `msg->data[MSG_DATA_7]` shifted left by 24 bits
  */
-static uint32_t pack_full_payload(const can_msg_t *msg) {
+static uint32_t pack_full_payload_le(const can_msg_t *msg) {
   uint32_t packed = 0;
   packed |= (uint32_t)msg->data[MSG_DATA_4];       /* LSB */
   packed |= (uint32_t)msg->data[MSG_DATA_5] << 8;  /* next */
@@ -172,13 +182,21 @@ static uint32_t pack_full_payload(const can_msg_t *msg) {
   return packed;
 }
 
-static uint32_t pack_bytes_u32(const uint8_t bytes[4]) 
-{
+static uint32_t pack_full_payload_be(const can_msg_t *msg) {
   uint32_t packed = 0;
-  packed |= (uint32_t)bytes[MSG_DATA_0] << 24;   /* MSB */
-  packed |= (uint32_t)bytes[MSG_DATA_1] << 16;   /* next */
-  packed |= (uint32_t)bytes[MSG_DATA_2] << 8;    /* next */
-  packed |= (uint32_t)bytes[MSG_DATA_3] & 0xFF;  /* LSB */
+  packed |= (uint32_t)msg->data[MSG_DATA_4] << 24;  /* MSB */
+  packed |= (uint32_t)msg->data[MSG_DATA_5] << 16;  /* next */
+  packed |= (uint32_t)msg->data[MSG_DATA_6] << 8;   /* next */
+  packed |= (uint32_t)msg->data[MSG_DATA_7] ;       /* LSB */
+  return packed;
+}
+
+static uint32_t pack_bytes_u32(const uint8_t bytes[4]) {
+  uint32_t packed = 0;
+  packed |= (uint32_t)bytes[MSG_DATA_0] << 24;  /* MSB */
+  packed |= (uint32_t)bytes[MSG_DATA_1] << 16;  /* next */
+  packed |= (uint32_t)bytes[MSG_DATA_2] << 8;   /* next */
+  packed |= (uint32_t)bytes[MSG_DATA_3] & 0xFF; /* LSB */
   return packed;
 }
 
@@ -284,7 +302,8 @@ static bool detect_binary_match(const can_msg_t *msg, uint8_t idx) {
  *
  * @return true
  */
-static bool detect_always(const can_msg_t *msg, uint8_t idx) { /* always return true */
+static bool detect_always(const can_msg_t *msg,
+                          uint8_t idx) { /* always return true */
   const route_entry_t *r = &g_routes[idx];
   const uint32_t incoming = pack_payload(msg); /* pack 3-byte payload */
   g_routeData[idx].last_payload = incoming;    /* update lastPayload */
@@ -302,7 +321,8 @@ static bool detect_always(const can_msg_t *msg, uint8_t idx) { /* always return 
  *
  * @return false
  */
-static bool detect_never(const can_msg_t *msg, uint8_t idx) { /* always return false */
+static bool detect_never(const can_msg_t *msg,
+                         uint8_t idx) { /* always return false */
   const route_entry_t *r = &g_routes[idx];
   const uint32_t incoming = pack_payload(msg); /* pack 3-byte payload */
   g_routeData[idx].last_payload = incoming;    /* update lastPayload */
@@ -322,7 +342,7 @@ static bool detect_never(const can_msg_t *msg, uint8_t idx) { /* always return f
 static bool detect_binary_match_full(const can_msg_t *msg, uint8_t idx) {
   const route_entry_t *r = &g_routes[idx];
 
-  const uint32_t incoming = pack_full_payload(msg);
+  const uint32_t incoming = pack_full_payload_be(msg);
   g_routeData[idx].last_payload = incoming; /* update lastPayload */
 
   return (incoming == r->match_value);
@@ -338,7 +358,7 @@ static bool detect_masked_binary_match(const can_msg_t *msg, uint8_t idx) {
 
 static bool detect_masked_binary_match_full(const can_msg_t *msg, uint8_t idx) {
   const route_entry_t *r = &g_routes[idx];
-  const uint32_t incoming = pack_full_payload(msg); /* 4-byte payload */
+  const uint32_t incoming = pack_full_payload_be(msg); /* 4-byte payload */
   g_routeData[idx].last_payload = incoming;
 
   return ((incoming & r->match_mask) == (r->match_value & r->match_mask));
@@ -455,7 +475,7 @@ static bool detect_match_byte(const can_msg_t *msg, uint8_t idx,
 
   const route_entry_t *r = &g_routes[idx];
 
-  const uint32_t incoming = pack_full_payload(msg);
+  const uint32_t incoming = pack_full_payload_be(msg);
   g_routeData[idx].last_payload = incoming;
 
   /* byte_index must be 4–7 */
@@ -468,16 +488,17 @@ static bool detect_identifier_match(const can_msg_t *msg, uint8_t idx) {
   const route_entry_t *r = &g_routes[idx];
 
   /* Update last_payload for consistency, even though ID is not payload */
-  const uint32_t incoming = pack_full_payload(msg);
+  const uint32_t incoming = pack_full_payload_be(msg);
   g_routeData[idx].last_payload = incoming;
 
-  return (msg->identifier == r->match_value);
+  router_logf("[match] identifier match value: 0x%03X payload: %u", r->source_msg_id, incoming);
+  return (msg->identifier == r->source_msg_id);
 }
 
 static bool detect_identifier_range(const can_msg_t *msg, uint8_t idx) {
   const route_entry_t *r = &g_routes[idx];
 
-  const uint32_t incoming = pack_full_payload(msg);
+  const uint32_t incoming = pack_full_payload_be(msg);
   g_routeData[idx].last_payload = incoming;
 
   const uint32_t id = msg->identifier;
@@ -494,7 +515,7 @@ static void action_generator(const route_entry_t *r, const uint8_t idx,
 
   // router_action_t act = {0}; /* zero out action buffer */
 
-  switch (r->ea.bits.action_type) {
+  switch (r->action_type) {
     case ACTION_FOLLOW_BINARY:
       {
         generate_action_follow_binary(r, idx, out);
@@ -510,6 +531,18 @@ static void action_generator(const route_entry_t *r, const uint8_t idx,
     case ACTION_SEND_DYNAMIC_PAYLOAD:
       {
         generate_action_send_dynamic_payload(r, idx, out);
+        break;
+      }
+
+    case ACTION_USE_32BIT_PAYLOAD:
+      {
+        generate_action_32bit_payload(r, idx, out);
+        break;
+      }
+
+    case ACTION_USE_64BIT_PAYLOAD:
+      {
+        generate_action_64bit_payload(r, idx, out);
         break;
       }
 
@@ -576,6 +609,35 @@ static void generate_action_follow_binary(const route_entry_t *r, uint8_t idx,
   out->valid = 1;
 }
 
+static void generate_action_32bit_payload(const route_entry_t *r, uint8_t idx,
+                                          router_action_t *out) {
+  out->actionMsgId = r->target_msg_id;
+  out->actionMsgDlc = r->target_msg_dlc;
+  out->sub_idx = 0; /* not used */
+
+  out->ext_payload32 =
+      g_routeData[idx].last_payload; /* 32-bit payload from match_identifier */
+  out->valid = 1;
+  out->payload_flag = PAYLOAD_FLAG_32BIT;
+}
+
+static void generate_action_64bit_payload(const route_entry_t *r, uint8_t idx,
+                                          router_action_t *out) {
+  out->actionMsgId = r->target_msg_id;
+  out->actionMsgDlc = r->target_msg_dlc;
+  out->sub_idx = 0; /* not used */
+
+  /* Router only preserves 32 bits today. Zero-extend to 64 bits. */
+  uint32_t low = g_routeData[idx].last_payload;
+  out->ext_payload64 = ((uint64_t)0 << 32) | low;
+
+  /* Optional: keep 32-bit copy for debugging or mixed-mode consumers */
+  out->ext_payload32 = low;
+
+  out->valid = 1;
+  out->payload_flag = PAYLOAD_FLAG_64BIT;
+}
+
 /* ============================================================================
  *  ROUTING: MULTI-FRAME SENDER
  * ========================================================================== */
@@ -588,7 +650,7 @@ static void generate_action_follow_binary(const route_entry_t *r, uint8_t idx,
  *
  * @return int The number of active routes.
  */
-int routerGetActiveRouteCount(void) {
+int router_get_active_route_count(void) {
   int ret = 0;
   for (uint8_t i = 0; i < MAX_ROUTES; i++) {
     if (!routerIsRouteInUse(i))
@@ -608,61 +670,129 @@ int routerGetActiveRouteCount(void) {
  * @return bool True if the route is in use, false otherwise.
  */
 bool routerIsRouteInUse(const uint8_t i) {
-  return g_routes[i].flags.bits.inUse;
+  return g_routes[i].route_flags & ROUTE_FLAG_INUSE;
 }
 
-void routerSetRouteUseFlag(const uint8_t i, const bool use) {
-  g_routes[i].flags.bits.inUse = use;
+void routerSetRouteUseFlag(const uint8_t i) {
+  g_routes[i].route_flags |= ROUTE_FLAG_INUSE;
+}
+
+void routerClearRouteUseFlag(const uint8_t i) {
+  g_routes[i].route_flags &= ~ROUTE_FLAG_INUSE;
 }
 
 bool routerIsRouteEnabled(const uint8_t i) {
-  return g_routes[i].flags.bits.enabled;
+  return g_routes[i].route_flags & ROUTE_FLAG_ENABLED;
 }
 
-void routerSetRouteEnableFlag(const uint8_t i, const bool enable) {
-  g_routes[i].flags.bits.enabled = enable;
+void routerSetRouteEnableFlag(const uint8_t i) {
+  g_routes[i].route_flags |= ROUTE_FLAG_ENABLED;
+}
+
+void routerClearRouteEnableFlag(const uint8_t i) {
+  g_routes[i].route_flags &= ~ROUTE_FLAG_ENABLED;
 }
 
 bool routerIsRouteWildcard(const uint8_t i) {
-  return g_routes[i].flags.bits.wildcard;
+  return g_routes[i].route_flags & ROUTE_FLAG_WILDCARD;
 }
 
-void routerSetRouteWildcardFlag(const uint8_t i, const bool enable) {
-  g_routes[i].flags.bits.wildcard = enable;
+void routerSetRouteWildcardFlag(const uint8_t i) {
+  g_routes[i].route_flags |= ROUTE_FLAG_WILDCARD;
 }
 
-uint16_t routerGetMsgsPerRoute(void) {
-  const uint16_t chunks =
+void routerClearRouteWildcardFlag(const uint8_t i) {
+  g_routes[i].route_flags &= ~ROUTE_FLAG_WILDCARD;
+}
+
+uint8_t router_get_msgs_per_route(void) {
+  const uint8_t chunks =
       (sizeof(route_entry_t) + ROUTE_CHUNK_SIZE - 1) / ROUTE_CHUNK_SIZE;
 
   return chunks + 2; // +1 for RouteBegin, +1 for RouteEnd
 }
 
-int serializeAllRoutes(can_msg_t *out, int maxMsgs) {
-  int total = 0;
+/* ============================================================================
+ *  ROUTING: MULTI-FRAME SENDER
+ * ========================================================================== */
 
-  for (uint8_t i = 0; i < MAX_ROUTES; i++) {
+static inline void write_node_id(can_msg_t *msg, const uint32_t node_id) {
+    msg->data[0] = (node_id >> 24) & 0xFF;
+    msg->data[1] = (node_id >> 16) & 0xFF;
+    msg->data[2] = (node_id >> 8)  & 0xFF;
+    msg->data[3] = (node_id)       & 0xFF;
+}
+
+int router_serialize_all_routes(const uint32_t node_id, can_msg_t *out, int max_msgs) {
+  int count = 0;
+  uint8_t active = router_get_active_route_count();
+  uint16_t total_msgs = router_get_total_msgs_required();
+
+  if (total_msgs > max_msgs) {
+    router_logf("[ROUTER] Error: failed to serialize route table, "
+                    "insufficient space! Required %u > provided %u", total_msgs, max_msgs);
+    return -1;
+  }
+  /* Add Route List Header */
+  count = router_route_list_header(count, node_id, active, total_msgs, out);
+
+  for (int i = 0; i < (MAX_ROUTES); i++) {
     if (!routerIsRouteInUse(i))
       continue;
 
-    int written = serializeRoute(i, &out[total], maxMsgs - total);
-    if (written < 0)
+    int written = router_serialize_route(node_id, i, &out[count], max_msgs - count);
+    if (written < 0) {
+      router_logf("[ROUTER] Error: failed to serialize route table, insufficient space %u", max_msgs - count);
       return -1; // caller didn't allocate enough space
+    }
 
-    total += written;
+    count += written;
   }
 
-  return total;
+  /* Add Route List Footer */
+  count = router_route_list_footer(count, node_id, active, total_msgs, out);
+
+  return count;
 }
 
-static int serializeRoute(uint8_t route_idx, can_msg_t *out, int maxMsgs) {
+static int router_route_list_header(int count, const uint32_t node_id, uint8_t active_route_count, int total_msg_count, can_msg_t *out) {
+  /* Route List Begin */
+  can_msg_t header = {0};
+  write_node_id(&header, node_id);
+  header.identifier = ROUTE_LIST_BEGIN_ID;
+  header.data_length_code = 7; //TODO: Update this to a a macro
+  header.data[4] = active_route_count;
+  header.data[5] = (uint8_t)(total_msg_count >> 8);
+  header.data[6] = (uint8_t)(total_msg_count);
+  out[count++] = (header);                                    
+                                  
+return count;
+}
+
+static int router_route_list_footer(int count, const uint32_t node_id, uint8_t active_route_count, int total_msg_count, can_msg_t *out){
+  /* Route List End */
+  can_msg_t footer = {0};
+  write_node_id(&footer, node_id);
+  footer.identifier = ROUTE_LIST_END_ID;
+  footer.data_length_code = 7; //TODO: Update this to a a macro
+  footer.data[4] = active_route_count;
+  footer.data[5] = (uint8_t)(total_msg_count >> 8);
+  footer.data[6] = (uint8_t)(total_msg_count);
+  out[count++] = (footer);                                    
+                                 
+return count;
+}
+                                  
+static int router_serialize_route(const uint32_t node_id, uint8_t route_idx, can_msg_t *out,
+                                  int max_msgs) {
   int count = 0;
 
-  if (maxMsgs < ROUTE_CHUNKS_PER_ROUTE + 2)
+  if (max_msgs < ROUTE_CHUNKS_PER_ROUTE + 2)
     return -1; // not enough space
 
   /* RouteBegin */
   can_msg_t begin = {0};
+  write_node_id(&begin, node_id);
   begin.identifier = CFG_ROUTE_BEGIN_ID;
   begin.data_length_code = CFG_ROUTE_BEGIN_DLC;
   begin.data[4] = route_idx;
@@ -674,6 +804,7 @@ static int serializeRoute(uint8_t route_idx, can_msg_t *out, int maxMsgs) {
 
   for (uint8_t chunk = 0; chunk < ROUTE_CHUNKS_PER_ROUTE; chunk++) {
     can_msg_t msg = {0};
+    write_node_id(&msg, node_id);
     msg.identifier = CFG_ROUTE_DATA_ID;
     msg.data_length_code = CFG_ROUTE_DATA_DLC;
 
@@ -689,6 +820,7 @@ static int serializeRoute(uint8_t route_idx, can_msg_t *out, int maxMsgs) {
 
   /* RouteEnd */
   can_msg_t end = {0};
+  write_node_id(&end, node_id);
   end.identifier = CFG_ROUTE_END_ID;
   end.data_length_code = CFG_ROUTE_END_DLC;
   end.data[4] = route_idx;
@@ -718,16 +850,16 @@ static void handleRouteBegin(const can_msg_t *msg) {
       msg->data[5]; /* data byte 5 is the total chunk count */
 
   if (route_idx >= (uint8_t)MAX_ROUTES) {
-    router_logf("[ROUTER] Error: invalid route index, command %u ignored\n",
-                msg->identifier);
+    // router_logf("[ROUTER] Error: invalid route index, command %u ignored\n",
+    //             msg->identifier);
     return;
   }
 
   if (total_chunks != (uint8_t)ROUTE_CHUNKS_PER_ROUTE) {
-    router_logf(
-        "[ROUTER] Error: invalid chunk count %u we expected %u, command %u "
-        "ignored\n",
-        total_chunks, (uint8_t)ROUTE_CHUNKS_PER_ROUTE, msg->identifier);
+    // router_logf(
+    //     "[ROUTER] Error: invalid chunk count %u we expected %u, command %u "
+    //     "ignored\n",
+        // total_chunks, (uint8_t)ROUTE_CHUNKS_PER_ROUTE, msg->identifier);
     return;
   }
 
@@ -737,12 +869,12 @@ static void handleRouteBegin(const can_msg_t *msg) {
 
   g_routeCrc[route_idx].crc = 0xFFFF;         /* reset crc */
   g_routeCrc[route_idx].ts = 0x00;            /* reset timestamp */
-  routerSetRouteUseFlag(route_idx, true);     /* reset in_use flag */
-  routerSetRouteEnableFlag(route_idx, false); /* reset enabled flag */
+  routerClearRouteUseFlag(route_idx);     /* reset in_use flag */
+  routerClearRouteEnableFlag(route_idx);  /* reset enabled flag */
 
   memset(&rxRouteBuffer, 0, sizeof(rxRouteBuffer));
-  router_logf("[ROUTER] Route begin, index: %u chunks: %u\n", route_idx,
-              total_chunks);
+  // router_logf("[ROUTER] Route begin, index: %u chunks: %u\n", route_idx,
+  //             total_chunks);
 }
 
 static void handleRouteData(const can_msg_t *msg) {
@@ -768,8 +900,8 @@ static void handleRouteData(const can_msg_t *msg) {
     dst[base + 2] = msg->data[7];
 
   rxRouteReceived++; // <-- NEW: count chunks
-  router_logf("[ROUTER] Route data: Route %u chunk received %u\n",
-              rxRouteReceived, chunk_idx);
+  // router_logf("[ROUTER] Route data: Route %u chunk received %u\n",
+  //             rxRouteReceived, chunk_idx);
 }
 
 static uint8_t handleRouteEnd(const can_msg_t *msg) {
@@ -781,31 +913,30 @@ static uint8_t handleRouteEnd(const can_msg_t *msg) {
   uint8_t commitFlag = msg->data[5];
 
   if (route_idx != rxRouteSlot) {
-    router_logf("[ROUTER] Error: route_idx (%u) != rxRouteSlot (%u)", route_idx,
-                rxRouteSlot);
+    // router_logf("[ROUTER] Error: route_idx (%u) != rxRouteSlot (%u)", route_idx,
+    //             rxRouteSlot);
     return ROUTE_INVALID_RX;
   }
 
   if (!commitFlag) {
-    router_logf("[ROUTER] Error: commit flag not set");
+    // router_logf("[ROUTER] Error: commit flag not set");
     return ROUTE_INVALID_RX; // ignore incomplete transfers
   }
 
   if (rxRouteReceived != rxRouteTotal) {
-    router_logf("[ROUTER] Error: rxRouteReceived (%u) != rxRouteTotal (%u)",
-                rxRouteReceived, rxRouteTotal);
+    // router_logf("[ROUTER] Error: rxRouteReceived (%u) != rxRouteTotal (%u)",
+    //             rxRouteReceived, rxRouteTotal);
     return ROUTE_INVALID_RX; // incomplete or missing chunks
   }
 
   memcpy(&g_routes[rxRouteSlot], &rxRouteBuffer, sizeof(route_entry_t));
-  routerSetRouteEnableFlag(
-      rxRouteSlot, true); /* set enabled flag even if the sender did not */
+  routerSetRouteEnableFlag(rxRouteSlot); /* set enabled flag even if the sender did not */
 
-  router_logf("[ROUTER] Route %u programming complete", rxRouteSlot);
+  // router_logf("[ROUTER] Route %u programming complete", rxRouteSlot);
 
   const uint8_t savedIdx = rxRouteSlot;
 
-  routerSetRouteUseFlag(savedIdx, true); /* set in_use flag */
+  routerSetRouteUseFlag(savedIdx); /* set in_use flag */
 
   uint16_t crc = 0xFFFF;
 
@@ -875,13 +1006,13 @@ static void handleRouteReadNVS(void) { g_routeLoadRequested = true; }
  *  ROUTE EXECUTION HOOK
  * ========================================================================== */
 
-static bool process_router_command(const can_msg_t *msg, 
-                                   router_action_t *out) {
+static bool process_router_command(const can_msg_t *msg, router_action_t *out) {
 
-  if (msg->isLocal) return false;
+  if (msg->isLocal)
+    return false;
 
   switch (msg->identifier) {
-    /* Internally handled commands must return false */
+      /* Internally handled commands must return false */
 
     case CFG_ROUTE_BEGIN_ID: handleRouteBegin(msg); return false;
 
@@ -893,9 +1024,12 @@ static bool process_router_command(const can_msg_t *msg,
 
     case CFG_ROUTE_WRITE_NVS_ID: handleRouteWriteNVS(); return false;
 
-    case CFG_ROUTE_READ_NVS_ID: handleRouteReadNVS(); return false;
+    case CFG_ROUTE_READ_NVS_ID:
+      handleRouteReadNVS();
+      return false;
 
-    /* External commands processed by the consumer or return data to the caller */
+      /* External commands processed by the consumer or return data to the
+       * caller */
 
     case CFG_ROUTE_END_ID:
       {
@@ -916,13 +1050,13 @@ static bool process_router_command(const can_msg_t *msg,
       return true;
 
     case REQ_ROUTE_LIST_ID:
-    //   out->valid = 1;
-    //   out->actionMsgId = REQ_ROUTE_LIST_ID;
-    //   out->actionMsgDlc = 0;
-    //   return true;
+      out->valid = 1;
+      out->actionMsgId = REQ_ROUTE_LIST_ID;
+      out->actionMsgDlc = REQ_ROUTE_LIST_DLC;
+      return true;
 
     default:
-      router_logf("[ROUTER] INVALID CONFIG MESSAGE: 0x%03X\n", msg->identifier);
+      // router_logf("[ROUTER] INVALID CONFIG MESSAGE: 0x%03X\n", msg->identifier);
       return false;
   }
 }
@@ -937,20 +1071,20 @@ bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out) {
   out->param1 = 0;
   out->param2 = 0;
 
-//   router_logf("[checkRoutes] CHECKING MESSAGE: 0x%03X\n", msg->identifier);
-
+  //   router_logf("[checkRoutes] CHECKING MESSAGE: 0x%03X\n", msg->identifier);
 
   /* ---------------------------------------------------------
    * CONFIGURATION COMMANDS (0x300–0x3FF)
    * --------------------------------------------------------- */
   if (msg->identifier >= ROUTE_CMD_START &&
-      msg->identifier <= ROUTE_CMD_END) // command message is between 0x300 and 0x31F
+      msg->identifier <=
+          ROUTE_CMD_END) // command message is between 0x300 and 0x31F
   {
     const uint32_t targetNodeID = pack_bytes_u32(&msg->data[0]);
     if (targetNodeID != my_node_id)
-        return false;   // not for us
+      return false; // not for us
 
-    return process_router_command(msg,  out);
+    return process_router_command(msg, out);
   }
 
   /* ---------------------------------------------------------
@@ -968,8 +1102,9 @@ bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out) {
     if (msg->identifier != r->source_msg_id)
       continue;
 
-    router_logf("[checkRoutes] msg: 0x%03X d4: %u d5: %u d6: %u d7: %u", msg->identifier, 
-                msg->data[MSG_DATA_4], msg->data[MSG_DATA_5], msg->data[MSG_DATA_6], msg->data[MSG_DATA_7]);
+    // router_logf("[checkRoutes] msg: 0x%03X d4: %u d5: %u d6: %u d7: %u",
+    //             msg->identifier, msg->data[MSG_DATA_4], msg->data[MSG_DATA_5],
+    //             msg->data[MSG_DATA_6], msg->data[MSG_DATA_7]);
 
     /* retrieve source node ID from payload, formatted big endian */
     const uint32_t sourceNodeId =
@@ -989,13 +1124,17 @@ bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out) {
     if (!er.matched)
       continue;
 
-    router_logf("[checkRoutes] MATCHED ROUTE: %u VALUE: %lu\n", i, er.value);
+    // router_logf("[checkRoutes] MATCHED ROUTE: %u VALUE: %lu\n", i, er.value);
 
     /* Generate semantic action */
     action_generator(r, i, out);
 
-    router_logf("[checkRoutes] ACTION: 0x%03X IDX: %u PAYLOAD: d5: 0x%02X d6: 0x%02X d7: 0x%02X \n", 
-      out->actionMsgId, out->sub_idx, out->param0, out->param1, out->param2);
+    // router_logf("[checkRoutes] ACTION: 0x%03X IDX: %u PAYLOAD: d5: 0x%02X d6: "
+    //             "0x%02X d7: 0x%02X \n",
+    //             out->actionMsgId, out->sub_idx, out->param0, out->param1,
+    //             out->param2);
+
+    // router_logf("[checkRoutes] event_type: %u action_type: %u payload_flag: %u", r->event_type, r->action_type, out->payload_flag);
     return true; /* route matched and has data for the consumer */
   }
 
@@ -1004,14 +1143,15 @@ bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out) {
    * --------------------------------------------------------- */
 
   if (msg->isLocal) {
-    // router_logf("[ROUTER] Skipping unmatched local message: 0x%03X\n", msg->identifier);
+    // router_logf("[ROUTER] Skipping unmatched local message: 0x%03X\n",
+    // msg->identifier);
     out->actionMsgId = ROUTE_TAKE_NO_ACTION;
     out->valid = 1;
     return true;
   }
 
   /* non local, no match, safe to return false */
-  return false; 
+  return false;
 }
 
 /**
@@ -1031,7 +1171,7 @@ static event_result_t evaluate_event(const uint8_t idx, const can_msg_t *msg) {
 
   const route_entry_t *r = &g_routes[idx];
 
-  switch (r->ea.bits.event_type) {
+  switch (r->event_type) {
     case EVENT_ALWAYS:
       {
         return_value = detect_always(msg, idx);
@@ -1147,14 +1287,13 @@ static event_result_t evaluate_event(const uint8_t idx, const can_msg_t *msg) {
       }
 
     case EVENT_NEVER: /* bookend event type 31 */
-    {
-      return_value = detect_never(msg, idx);
-      break;
-    
-    }
+      {
+        return_value = detect_never(msg, idx);
+        break;
+      }
     default:
       {
-        router_logf("[ROUTER] Invalid event type: %u", r->ea.bits.event_type);
+        router_logf("[ROUTER] Invalid event type: %u", r->event_type);
         return_value = false;
         break;
       }
@@ -1165,7 +1304,7 @@ static event_result_t evaluate_event(const uint8_t idx, const can_msg_t *msg) {
 
   if (return_value) {
     g_routeData[idx].hit_count++;
-    
+
     if (g_timestamp_cb)
       g_routeData[idx].ts_matched = g_timestamp_cb();
     else
@@ -1236,32 +1375,39 @@ uint8_t routerGetMaxRouteCount(void) { return MAX_ROUTES; }
  */
 uint8_t routerGetEnabledRouteCount(void) { return countEnabledRoutes(); }
 
+uint16_t router_get_total_msgs_required(void) { 
+  const uint8_t msgs_per_route = router_get_msgs_per_route();
+  const uint8_t active_route_count = router_get_active_route_count();
+  const uint16_t total_msg_count = (active_route_count * msgs_per_route) + 2; // +1 for RouteBegin, +1 for RouteEnd
+
+    return total_msg_count;
+}
+
+
 /* Write a function that uses printf to pretty-print the contents of
  * the routing table, based on the struct route_entry_t */
-
 void prettyPrintRoutes(void) {
-  router_logf("[ROUTER] Routing Table:\n");
+  router_logf("[ROUTER] Routing Table:");
   for (uint8_t i = 0; i < MAX_ROUTES; i++) {
     if (routerIsRouteInUse(i)) {
-      router_logf("  Route %u: Enabled: %c\n", i,
-                  routerIsRouteEnabled(i) ? 'Y' : 'N');
-      router_logf("    CRC: 0x%04X\n", g_routeCrc[i].crc);
+      router_logf("  Route %u: Enabled: %c Flags: 0x%02X", i,
+                  routerIsRouteEnabled(i) ? 'Y' : 'N', 
+                  g_routes[i].route_flags);
+      router_logf("    CRC: 0x%04X", g_routeCrc[i].crc);
       router_logf("    Source Node Id: 0x%08X\n", g_routes[i].source_node_id);
       router_logf(
-          "    Source: msg_id = 0x%03X, sub_idx = %u, event_type = %u\n",
+          "    Source: msg_id = 0x%03X, sub_idx = %u, event = %u, action = %u",
           g_routes[i].source_msg_id, g_routes[i].source_sub_idx,
-          g_routes[i].ea.bits.event_type);
+          g_routes[i].event_type, g_routes[i].action_type);
       router_logf(
-          "    Target: msg_id = 0x%03X, sub_idx = %u, action_type = %u\n",
-          g_routes[i].target_msg_id, g_routes[i].target_sub_idx),
-          g_routes[i].ea.bits.action_type;
-      router_logf("    match_value: %lu, match_mask: %lu\n",
+          "    Target: msg_id = 0x%03X, sub_idx = %u",
+          g_routes[i].target_msg_id, g_routes[i].target_sub_idx);
+      router_logf("    match_value: %lu, match_mask: %lu",
                   g_routes[i].match_value, g_routes[i].match_mask);
-      router_logf("    Payload parameters: 0: 0x%02X 1: 0x%02X 2: 0x%02X\n ",
+      router_logf("    Payload parameters: 0: 0x%02X 1: 0x%02X 2: 0x%02X",
                   g_routes[i].parameters[0], g_routes[i].parameters[1],
                   g_routes[i].parameters[2]);
-      router_logf("    Reserved bytes: 0: 0x%02X 1: 0x%02X\n",
-                  g_routes[i].reserved[0], g_routes[i].reserved[1]);
+      router_logf("    Reserved byte: 0x%02X", g_routes[i].reserved);
     }
   }
 }

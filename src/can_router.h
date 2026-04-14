@@ -26,28 +26,27 @@
 #define ROUTE_CHUNKS_PER_ROUTE                                                 \
   ((ROUTE_ENTRY_SIZE + ROUTE_CHUNK_SIZE - 1) / ROUTE_CHUNK_SIZE)
 
+
+/* Route control flags*/
+#define ROUTE_FLAG_ENABLED         (1u << 0) /**< routing is enabled */
+#define ROUTE_FLAG_WILDCARD        (1u << 1) /**< route will match any node id */
+#define ROUTE_FLAG_DYNAMIC_PARAMS  (1u << 2) /**< route has uses dynamic parameters (not typical) */
+#define ROUTE_FLAG_INUSE           (1u << 3) /**< slot is populated */
+
 /* ============================================================================
  *  DATA STRUCTURES
  * ========================================================================== */
 
 typedef union route_flags {
   struct {
-    uint8_t enabled : 1;
-    uint8_t wildcard : 1;
-    uint8_t dynamic_params : 1;
-    uint8_t inUse : 1;
-    uint8_t reserved : 4;
+    uint8_t enabled : 1;          /**< routing is enabled */
+    uint8_t wildcard : 1;         /**< route will match any node id */
+    uint8_t dynamic_params : 1;   /**< route has uses parameters (not typical) */
+    uint8_t inUse : 1;            /**< slot is populated */
+    uint8_t reserved : 4;         /**< reserved for future use */
   } bits;
   uint8_t raw;
 } route_flags_t;
-
-typedef union event_action {
-  struct bits {
-    uint8_t event_type : 5;  /**< event type, max 31 */
-    uint8_t action_type : 3; /**< action type, max 7 */
-  } bits;
-  uint8_t raw;
-} route_event_action_t;
 
 typedef struct __attribute__((packed)) route_entry {
   /* Source information fields */
@@ -62,8 +61,9 @@ typedef struct __attribute__((packed)) route_entry {
   uint8_t target_sub_idx; /* target submodule index */
 
   /* Routing information fields */
-  route_event_action_t ea; /* Event + action packed into one byte */
-  route_flags_t flags;     /* Routing flags packed into one byte */
+  uint8_t event_type;      /* See event_type_t enum and EVENT_ */
+  uint8_t action_type;     /* See action_type_t enum and ACTION_ */
+  uint8_t route_flags;     /* Route control flags, see ROUTE_FLAG_ */
 
   /* Comparison fields */
   union __attribute__((packed)) {
@@ -84,7 +84,7 @@ typedef struct __attribute__((packed)) route_entry {
   uint8_t parameters[3]; /* 3 bytes of static payload parameters */
 
   /* Reserved for future use */
-  uint8_t reserved[2]; /* 2 bytes of padding */
+  uint8_t reserved; /* 1 byte of padding */
 } route_entry_t;
 
 typedef enum event_type {
@@ -119,16 +119,22 @@ typedef enum event_type {
 } event_type_t;
 
 typedef enum action_type {
-  ACTION_NO_ACTION = (0U),     /**< No action */
-  ACTION_FOLLOW_BINARY = (1U), /**< Follow binary value */
-  ACTION_SEND_DYNAMIC_PAYLOAD =
-      (2U), /**< Send synthetic message with dynamic payload */
-  ACTION_SEND_STATIC_PAYLOAD =
-      (3U),                 /**< Send synthetic message with static payload */
-  ACTION_RESERVED_4 = (4U), /**< Reserved for future use */
-  ACTION_RESERVED_5 = (5U), /**< Reserved for future use */
-  ACTION_RESERVED_6 = (6U), /**< Reserved for future use */
-  ACTION_RESERVED_7 = (7U)  /**< Reserved for future use - stop here */
+  /** No action */
+  ACTION_NO_ACTION = (0U),
+  /** Follow binary value */
+  ACTION_FOLLOW_BINARY = (1U),
+  /** Send synthetic message with dynamic payload */
+  ACTION_SEND_DYNAMIC_PAYLOAD = (2U),
+  /** Send synthetic message with static payload */
+  ACTION_SEND_STATIC_PAYLOAD = (3U),
+  /** Send synthetic message with 32-bit payload */
+  ACTION_USE_32BIT_PAYLOAD = (4U),
+  /** Send synthetic message with 64-bit payload */
+  ACTION_USE_64BIT_PAYLOAD = (5U),
+  /** Reserved for future use */
+  ACTION_RESERVED_6 = (6U),
+  /**< Reserved for future use - stop here */
+  ACTION_RESERVED_7 = (7U)
 } action_type_t;
 
 /* structure to hold route entry data such as last value, crc, etc
@@ -146,7 +152,7 @@ typedef struct __attribute__((packed)) route_entry_data {
   uint32_t hit_count;    /* number of successful matches */
 } route_entry_data_t;
 
-typedef struct __attribute__((packed)) router_action {
+typedef struct router_action {
   /* message identifier and dlc*/
   uint16_t actionMsgId; // 16-bit CAN message ID
   uint8_t actionMsgDlc; // DLC for synthetic message
@@ -157,11 +163,23 @@ typedef struct __attribute__((packed)) router_action {
   /* target submodule*/
   uint8_t sub_idx; // submodule index byte 4
 
+  /* for special actions */
+  uint8_t payload_flag;   /**< 0 = use param0:3, 1 = use payload32, 2 = use
+                             payload64 */
+  uint32_t ext_payload32; // 32-bit payload
+  uint64_t ext_payload64; // 64-bit payload
+
   /* up to three bytes of payload */
   uint8_t param0; // byte 5
   uint8_t param1; // byte 6
   uint8_t param2; // byte 7
 } router_action_t;
+
+typedef enum payload_flags {
+  PAYLOAD_FLAG_NONE = 0,
+  PAYLOAD_FLAG_32BIT = 1,
+  PAYLOAD_FLAG_64BIT = 2
+} payload_flag_t;
 
 typedef struct event_result {
   bool matched;
@@ -205,7 +223,6 @@ typedef void (*router_log_fn_t)(const char *msg);
 
 void router_set_log_callback(router_log_fn_t fn);
 
-
 // static inline route_entry_crc_t makeSanitizedRouteEntryData(const
 // route_entry_crc_t *src)
 // {
@@ -225,18 +242,32 @@ void router_set_log_callback(router_log_fn_t fn);
  * ========================================================================== */
 
 bool checkRoutes(can_msg_t *msg, uint32_t my_node_id, router_action_t *out);
+
+/* route flag accessors */
 bool routerIsRouteInUse(const uint8_t i);
 bool routerIsRouteEnabled(const uint8_t i);
-void routerSetRouteUseFlag(const uint8_t i, const bool use);
-void routerSetRouteEnableFlag(const uint8_t i, const bool enable);
+bool routerIsRouteWildcard(const uint8_t i);
+
+void routerSetRouteUseFlag(const uint8_t i);
+void routerClearRouteUseFlag(const uint8_t i);
+
+void routerSetRouteEnableFlag(const uint8_t i);
+void routerClearRouteEnableFlag(const uint8_t i);
+
+void routerClearRouteWildcardFlag(const uint8_t i);
+void routerSetRouteWildcardFlag(const uint8_t i);
+
 
 uint8_t routerGetRouteCount(void);
 uint8_t routerGetEnabledRouteCount(void);
 uint8_t routerGetMaxRouteCount(void);
 void prettyPrintRoutes(void);
-int serializeAllRoutes(can_msg_t *out, int maxMsgs);
-int routerGetActiveRouteCount(void);
-uint16_t routerGetMsgsPerRoute(void);
+
+/* route table serialization */
+int router_serialize_all_routes(const uint32_t node_id, can_msg_t *out, int max_msgs);
+int router_get_active_route_count(void);
+uint8_t router_get_msgs_per_route(void);
+uint16_t router_get_total_msgs_required(void);
 
 /* ============================================================================
  *  END C LINKAGE
